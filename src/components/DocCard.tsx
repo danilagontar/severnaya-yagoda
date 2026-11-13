@@ -10,7 +10,8 @@ import { polishDraft, type LlmMode } from "@/llm/provider";
 import { VERDICT, VerdictTag, fmtRub, verdictTextColor } from "./verdict";
 import { Sep } from "@/components/sep";
 import { DecisionPanel } from "@/components/DecisionPanel";
-import type { Decision, DocStatus } from "@/core/events";
+import type { Decision, DocStatus, TimelineItem } from "@/core/events";
+import { OrderTimeline } from "@/components/OrderTimeline";
 
 const ROW_FIELD: Record<CompareRow["key"], FieldKey | null> = { supplier: null, material: "material", qty: "qty", price: "price", total: "total" };
 const FIELD_LABEL: Partial<Record<FieldKey, string>> = {
@@ -67,7 +68,7 @@ function LetterText({ text, spans, active }: { text: string; spans: Result["ex"]
 
 
 // Черновики писем (в том числе дописанные ИИ и исправленные вручную) переживают перезагрузку.
-// Ключ — документ и адресат; «Шаблон» возвращает текст из сверки и стирает сохранённый.
+// Ключ: документ и адресат; «Шаблон» возвращает текст из сверки и стирает сохранённый.
 type SavedDraft = { body: string; note: string | null };
 const DRAFTS_KEY = "sy.drafts";
 const OPEN_KEY = "sy.draftOpen";
@@ -116,6 +117,7 @@ export function DocCard({
   onSelect,
   status,
   onDecide,
+  timeline,
   llm,
   onCrossCheck,
 }: {
@@ -124,6 +126,7 @@ export function DocCard({
   onSelect: (id: string) => void;
   status: DocStatus;
   onDecide: (d: Decision | null) => string | null;
+  timeline: TimelineItem[];
   llm: LlmMode;
   onCrossCheck: (r: Result) => Promise<void>;
 }) {
@@ -158,7 +161,7 @@ export function DocCard({
   const [busy, setBusy] = useState(false);
   const v = VERDICT[r.verdict];
   const draft = draftIdx !== null ? buildDraft(r, r.addressees[draftIdx], all) : null;
-  // Адрес: из адресата (поставщик) или из писем сотрудников в данных кейса; иначе пусто — почта откроется без получателя.
+  // Адрес: из адресата (поставщик) или из писем сотрудников в данных кейса; иначе пусто: почта откроется без получателя.
   const email = draft
     ? draft.to.email ?? all.find((x) => x.ex.senderDomain === COMPANY_DOMAIN && x.ex.senderName === draft.to.name)?.ex.senderEmail ?? null
     : null;
@@ -502,6 +505,9 @@ export function DocCard({
         </section>
       )}
       <span className="sr-only">{v.long}</span>
+
+      {/* История заказа: в самом низу карточки */}
+      {r.orderId && <OrderTimeline orderId={r.orderId} items={timeline} currentId={r.id} onSelect={onSelect} />}
     </article>
   );
 }

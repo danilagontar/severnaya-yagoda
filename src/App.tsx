@@ -4,8 +4,10 @@ import { INVOICES, cn, plural } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import rawData from "@/data/case.json";
 import { extractByRules } from "@/core/extract";
-import { reconcileAll, summarize } from "@/core/reconcile";
-import { computeState, makeEvent, validateDecision, type AppEvent, type Decision } from "@/core/events";
+import { reconcileAll, summarize, type Extractor } from "@/core/reconcile";
+import { computeState, describeEvent, makeEvent, metrics, metricsDelta, orderTimeline, validateDecision, type AppEvent, type Decision, type Metrics } from "@/core/events";
+import { Scenarios } from "@/components/Scenarios";
+import type { Scenario } from "@/data/scenarios";
 import type { CaseData, Extracted, Letter, Verdict } from "@/core/types";
 import { extractWithLlm, getLlmStatus, type LlmMode } from "@/llm/provider";
 import { Queue, DEFAULT_FILTER, type QueueFilter } from "@/components/Queue";
@@ -18,7 +20,7 @@ import { VERDICT, fmtRub } from "@/components/verdict";
 import { Sep } from "@/components/sep";
 
 const data = rawData as CaseData;
-type View = "queue" | "registry" | "etalon" | "new";
+type View = "queue" | "registry" | "scenarios" | "etalon";
 
 const load = <T,>(k: string, d: T): T => {
   try {
@@ -32,13 +34,13 @@ const save = (k: string, v: unknown) => {
   try {
     localStorage.setItem(k, JSON.stringify(v));
   } catch {
-    /* хранилище недоступно — работаем без него */
+    /* хранилище недоступно: работаем без него */
   }
 };
 
 export default function App() {
   // Журнал событий: письма, решения бухгалтера, передача реестра (src/core/events.ts).
-  // Раньше новые письма лежали в sy.extra — переносим их в журнал один раз.
+  // Раньше новые письма лежали в sy.extra: переносим их в журнал один раз.
   const [events, setEvents] = useState<AppEvent[]>(() => load<AppEvent[] | null>("sy.events", null) ?? load<Letter[]>("sy.extra", []).map((letter) => makeEvent({ type: "letter", letter })));
   // разбор ИИ сохраняется: иначе после перезагрузки письма, где поля нашёл только ИИ, разберутся одними правилами и сменят вердикт
   const [llmCache, setLlmCache] = useState<Record<string, Extracted>>(() => load("sy.llm", {}));
@@ -52,7 +54,16 @@ export default function App() {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(load<string[]>("sy.collapsed", ["none"])));
   const [dark, setDark] = useState<boolean>(() => load("sy.dark", false));
   const [llm, setLlm] = useState<{ mode: LlmMode; model: string | null }>({ mode: "rules", model: null });
-  const [changes, setChanges] = useState<{ id: string; from: Verdict; to: Verdict }[] | null>(null);
+  // баннер после события: что произошло и у каких документов сменился вердикт
+  const [changes, setChanges] = useState<{ label: string; items: { id: string; from: Verdict; to: Verdict }[] } | null>(null);
+  // метки разницы на плитках сводки после последнего события
+  const [delta, setDelta] = useState<Partial<Metrics> | null>(null);
+  const deltaTimer = useRef<number | undefined>(undefined);
+  const [flash, setFlash] = useState(0);
+  // «Новое письмо» в шапке: переход во вкладку «Сценарии» к форме письма
+  const [letterFocus, setLetterFocus] = useState(0);
+  // направление подсветки плиток: живёт до следующего события, чтобы цвет догас, даже когда цифры уже скрыты
+  const [flashDelta, setFlashDelta] = useState<Partial<Metrics> | null>(null);
   const [tick, setTick] = useState(0);
   const [mobileQueue, setMobileQueue] = useState(false);
   const mainRef = useRef<HTMLDivElement>(null);
@@ -86,8 +97,8 @@ export default function App() {
     }
   }, [results, selected]);
 
-  // Прокрутка: у каждой вкладки своя позиция. Первый заход — сверху, потом — где остановились.
-  // На компьютере прокручивается <main>, на узком экране — вся страница.
+  // Прокрутка: у каждой вкладки своя позиция. Первый заход: сверху, потом: где остановились.
+  // На компьютере прокручивается <main>, на узком экране: вся страница.
   const scrollPos = useRef<Partial<Record<View, number>>>({});
   const viewRef = useRef<View>(view);
   const scroller = () => (window.matchMedia("(min-width: 768px)").matches ? mainRef.current : null);
@@ -134,11 +145,7 @@ export default function App() {
       setLlmCache(cache);
       setTick((t) => t + 1);
     }
-    const next = [...events, makeEvent({ type: "letter", letter })];
-    const before = new Map(results.map((r) => [r.id, r.verdict]));
-    const after = computeState(data, next, (t, s) => cache[s + "\n" + t] ?? extractByRules(t, s)).results;
-    setChanges(after.filter((r) => before.has(r.id) && before.get(r.id) !== r.verdict).map((r) => ({ id: r.id, from: before.get(r.id)!, to: r.verdict })));
-    setEvents(next);
+    apply([...events, makeEvent({ type: "letter", letter })], { label: `Пришло письмо ${id}`, ex: (t, s) => cache[s + "\n" + t] ?? extractByRules(t, s) });
     setSelected(id);
     setView("queue");
   };
@@ -150,22 +157,51 @@ export default function App() {
     const removedIds = new Set(extra.map((l) => l.id));
     forgetDrafts((id) => removedIds.has(id));
     // убираем только письма; решения по ним без документа ни на что не влияют
-    setEvents((ev) => ev.filter((e) => e.type !== "letter"));
-    setChanges(null);
+    apply(events.filter((e) => e.type !== "letter"), { label: "Новые письма убраны из очереди" });
     setSelected(null);
   };
 
-  // «Требует решения» — стоп / вернуть / вопрос без действующего решения бухгалтера
+  // «Требует решения»: стоп / вернуть / вопрос без действующего решения бухгалтера
   const open = results.filter((r) => (r.verdict === "stop" || r.verdict === "return" || r.verdict === "ask") && !statuses.get(r.id)?.valid);
   const needDecision = open.length;
   const openBy = (v: string) => open.filter((r) => r.verdict === v).length;
-  // «Разобрано» — документы, по которым бухгалтер принимает решение (дубли и письма-контекст решения не требуют)
+  // «Разобрано»: документы, по которым бухгалтер принимает решение (дубли и письма-контекст решения не требуют)
   const decidable = results.filter((r) => r.verdict !== "duplicate" && r.verdict !== "letter");
   const decided = decidable.filter((r) => statuses.get(r.id)?.resolved).length;
   const waitingCount = decidable.filter((r) => statuses.get(r.id)?.waiting).length;
 
-  const push = (e: AppEvent) => setEvents((ev) => [...ev, e]);
-  /** Решение бухгалтера (null — вернуть в работу). Возвращает текст ошибки, если решение не подходит. */
+  /**
+   * Применить новый журнал: пересчитать, показать разницу показателей на плитках и (с label) баннер
+   * с документами, у которых сменился вердикт.
+   */
+  const apply = (next: AppEvent[], opts: { label?: string; ex?: Extractor } = {}) => {
+    const after = computeState(data, next, opts.ex ?? extractor);
+    const d = metricsDelta(metrics(state), metrics(after));
+    window.clearTimeout(deltaTimer.current);
+    setDelta(Object.keys(d).length ? d : null);
+    setFlash((n) => n + 1);
+    setFlashDelta(d);
+    deltaTimer.current = window.setTimeout(() => setDelta(null), 4000); // цифры разницы 4 с, цвет плитки гаснет 6 с (index.css)
+    if (opts.label) {
+      const before = new Map(results.map((r) => [r.id, r.verdict]));
+      setChanges({ label: opts.label, items: after.results.filter((r) => before.has(r.id) && before.get(r.id) !== r.verdict).map((r) => ({ id: r.id, from: before.get(r.id)!, to: r.verdict })) });
+    }
+    setEvents(next);
+  };
+  const push = (e: AppEvent) => apply([...events, e]);
+  const undoLast = () => events.length && apply(events.slice(0, -1), { label: `Отменено: ${describeEvent(events[events.length - 1])}` });
+  const removeEvent = (id: string) => {
+    const e = events.find((x) => x.id === id);
+    if (e) apply(events.filter((x) => x.id !== id), { label: `Убрано из журнала: ${describeEvent(e)}` });
+  };
+  const resetAll = () => {
+    forgetDrafts((id) => id.startsWith("Н-"));
+    apply([], { label: "Демо сброшено: исходные 25 документов" });
+    setSelected(null);
+  };
+  const runScenario = (sc: Scenario) => apply([...events, makeEvent(sc.event)], { label: sc.title });
+  const timeline = useMemo(() => (current?.orderId ? orderTimeline(data, events, results, current.orderId) : []), [current?.orderId, events, results]);
+  /** Решение бухгалтера (null: вернуть в работу). Возвращает текст ошибки, если решение не подходит. */
   const decide = (r: (typeof results)[number], d: Decision | null): string | null => {
     if (!d) {
       push(makeEvent({ type: "reopen", doc: r.id }));
@@ -210,6 +246,7 @@ export default function App() {
   const NAV: { id: View; label: string }[] = [
     { id: "queue", label: "Очередь" },
     { id: "registry", label: "Реестр" },
+    { id: "scenarios", label: "Сценарии" },
     { id: "etalon", label: "Проверка на эталоне" },
   ];
 
@@ -252,7 +289,13 @@ export default function App() {
           >
             {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </button>
-          <Button size="sm" onClick={() => setView("new")}>
+          <Button
+            size="sm"
+            onClick={() => {
+              setView("scenarios");
+              setLetterFocus((n) => n + 1);
+            }}
+          >
             <Plus />
             Новое письмо
           </Button>
@@ -260,37 +303,45 @@ export default function App() {
       </header>
 
       {/* Итоги очереди */}
-      {/* Сетка: у плиток одного ряда общая строка подписей и общая строка сумм — всё на одном уровне, даже если подпись переносится */}
+      {/* Сетка: у плиток одного ряда общая строка подписей и общая строка сумм: всё на одном уровне, даже если подпись переносится */}
       <section aria-label="Итоги очереди" className="grid shrink-0 grid-cols-[repeat(auto-fit,minmax(150px,1fr))] border-b border-line bg-surface">
         <Stat
+          key={`reg-${flash}`}
           label="В реестре"
           hint={`${registry.items.length} ${plural(registry.items.length, INVOICES)}`}
           value={fmtRub(registry.total)}
           tone="pay"
           link={{ label: "реестр", onClick: () => setView("registry") }}
           extra={`из ${fmtRub(registry.proposed.total)}`}
+          delta={delta?.registry} flash={flashDelta?.registry} polarity={1}
           detail={`Сверка предлагает к оплате ${num(registry.proposed.total)} ₽ (${registry.proposed.count} ${plural(registry.proposed.count, INVOICES)}). В реестр попадают только счета, подтверждённые бухгалтером.`}
         />
         <Stat
+          key={`prev-${flash}`}
           label="Не платить"
           hint="дубли, подмена, цены, итог"
           value={fmtRub(summary.preventedTotal)}
+          delta={delta?.prevented} flash={flashDelta?.prevented} polarity={0}
           detail={`Дубли ${num(summary.prevented.duplicate)} ₽
 Подмена получателя ${num(summary.prevented.fraud)} ₽
 Цены без согласования ${num(summary.prevented.price)} ₽
 Ошибка в итоге ${num(summary.prevented.arithmetic)} ₽`}
         />
         <Stat
+          key={`def-${flash}`}
           label="Отложено"
           hint="не экономия"
           value={fmtRub(summary.deferred)}
+          delta={delta?.deferred} flash={flashDelta?.deferred} polarity={0}
           extra={summary.held > 0 ? `+ задержано ${fmtRub(summary.held)}` : undefined}
           detail={`До приёмки на складе или ответа закупщика. Эти деньги заплатят позже, это не экономия.${summary.held > 0 ? `\nОтдельно задержано ${num(summary.held)} ₽: сверка пройдена, но поставщику пишут о смене реквизитов (П-2).` : ""}`}
         />
         <Stat
+          key={`need-${flash}`}
           label="Требует решения"
           hint={`стоп ${openBy("stop")} | вернуть ${openBy("return")} | вопрос ${openBy("ask")}`}
           value={String(needDecision)}
+          delta={delta?.need} flash={flashDelta?.need} polarity={-1}
           tone="ask"
           link={{
             label: "в очередь",
@@ -302,26 +353,8 @@ export default function App() {
             },
           }}
         />
-        <Stat label="Разобрано" hint={waitingCount ? `ждём ответа ${waitingCount}` : `в ящике ${summary.total}`} value={`${decided} из ${decidable.length}`} />
+        <Stat key={`dec-${flash}`} label="Разобрано" hint={waitingCount ? `ждём ответа ${waitingCount}` : `в ящике ${summary.total}`} value={`${decided} из ${decidable.length}`} delta={delta?.decided} flash={flashDelta?.decided} polarity={1} />
       </section>
-
-      {changes && (
-        <div role="status" className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-line bg-hl/60 px-5 py-2 text-[13px] text-ink">
-          <span className="font-medium">Очередь пересчитана.</span>
-          {changes.length === 0 ? (
-            <span className="text-muted-foreground">Вердикты остальных документов не изменились.</span>
-          ) : (
-            changes.map((c) => (
-              <button key={c.id} onClick={() => select(c.id)} className="underline decoration-ink/30 underline-offset-2 hover:decoration-ink">
-                {c.id}: {VERDICT[c.from].label.toLowerCase()} → {VERDICT[c.to].label.toLowerCase()}
-              </button>
-            ))
-          )}
-          <button onClick={() => setChanges(null)} className="ml-auto grid size-6 place-items-center rounded hover:bg-black/5" aria-label="Скрыть">
-            <X className="size-3.5" />
-          </button>
-        </div>
-      )}
 
       <div className="flex flex-1 md:min-h-0">
         <aside className="hidden w-[360px] shrink-0 flex-col border-r border-line bg-surface-2 md:flex">{queuePanel}</aside>
@@ -340,6 +373,29 @@ export default function App() {
         )}
 
         <main ref={mainRef} className="min-w-0 flex-1 md:overflow-y-auto">
+          {changes && (
+            <div role="status" className="sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line bg-hl px-5 py-2 text-[13px] text-ink">
+              <span className="font-medium">{changes.label}.</span>
+              {changes.items.length === 0 ? (
+                <span className="text-muted-foreground">Вердикты документов не изменились.</span>
+              ) : (
+                changes.items.map((c) => (
+                  <button key={c.id} onClick={() => select(c.id)} className="underline decoration-ink/30 underline-offset-2 hover:decoration-ink">
+                    {c.id}: {VERDICT[c.from].label.toLowerCase()} → {VERDICT[c.to].label.toLowerCase()}
+                  </button>
+                ))
+              )}
+              {events.length > 0 && (
+                <button onClick={undoLast} className="ml-auto text-[12.5px] underline decoration-ink/30 underline-offset-2 hover:decoration-ink">
+                  отменить последнее
+                </button>
+              )}
+              <button onClick={() => setChanges(null)} className={cn("grid size-6 place-items-center rounded hover:bg-black/5", !events.length && "ml-auto")} aria-label="Скрыть">
+                <X className="size-3.5" />
+              </button>
+            </div>
+          )}
+
           {view === "queue" && (
             <div className="flex items-center gap-2 border-b border-line bg-surface-2 px-4 py-2 text-[13px] md:hidden">
               <button onClick={() => setMobileQueue(true)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-surface px-2.5 font-medium text-ink">
@@ -362,6 +418,7 @@ export default function App() {
               onSelect={select}
               status={statuses.get(current.id)!}
               onDecide={(d) => decide(current, d)}
+              timeline={timeline}
               llm={llm.mode}
               onCrossCheck={async (r) => {
                 const { ex } = await extractWithLlm(r.text, r.sender, "ИИ");
@@ -379,8 +436,23 @@ export default function App() {
               onSubmit={() => push(makeEvent({ type: "registry-submitted", ids: registry.items.map((i) => i.r.id), total: registry.total }))}
               onApprove={() => push(makeEvent({ type: "registry-approved" }))}
             />}
+          {view === "scenarios" && (
+            <Scenarios
+              form={<NewLetter onSubmit={addLetter} llm={llm.mode} nextId={nextId} focusKey={letterFocus} />}
+              events={events}
+              preview={(body) => {
+                const after = computeState(data, [...events, makeEvent(body)], extractor);
+                return after.results.filter((r) => results.find((x) => x.id === r.id)?.verdict !== r.verdict).map((r) => ({ id: r.id, from: results.find((x) => x.id === r.id)!.verdict, to: r.verdict }));
+              }}
+              onRun={runScenario}
+              onLetter={addLetter}
+              onUndo={undoLast}
+              onRemove={removeEvent}
+              onReset={resetAll}
+              onSelect={select}
+            />
+          )}
           {view === "etalon" && <EtalonView base={base} summary={baseSummary} onSelect={select} />}
-          {view === "new" && <NewLetter onSubmit={addLetter} onClose={() => setView("queue")} llm={llm.mode} nextId={nextId} />}
         </main>
       </div>
     </div>
@@ -389,22 +461,54 @@ export default function App() {
 
 const num = (n: number) => n.toLocaleString("ru-RU");
 
-function Stat({ label, hint, value, detail, tone, link, extra }: { label: string; hint?: string; value: string; detail?: string; tone?: "pay" | "ask"; link?: { label: string; onClick: () => void }; extra?: string }) {
+function Stat({
+  label,
+  hint,
+  value,
+  detail,
+  tone,
+  link,
+  extra,
+  delta,
+  flash,
+  polarity = 0,
+}: {
+  label: string;
+  hint?: string;
+  value: string;
+  detail?: string;
+  tone?: "pay" | "ask";
+  link?: { label: string; onClick: () => void };
+  extra?: string;
+  delta?: number; // изменение после последнего события (цифра, скрывается через 4 с)
+  flash?: number; // изменение для подсветки плитки (живёт до следующего события)
+  polarity?: 1 | -1 | 0; // 1: рост это хорошо, −1: рост это плохо, 0: без оценки
+}) {
+  // цвет по смыслу: стало лучше: зелёный, хуже: красный, без оценки: жёлтый
+  const meaning = (v?: number) => (!v ? null : polarity === 0 ? "neutral" : Math.sign(v) * polarity > 0 ? "good" : "bad");
+  const flashTone = meaning(flash);
+  const chipTone = meaning(delta);
   return (
-    <div className="row-span-2 grid min-w-0 grid-rows-subgrid border-r border-b border-line px-4 py-2 last:border-r-0 md:border-b-0" title={detail}>
+    <div className={cn("row-span-2 grid min-w-0 grid-rows-subgrid border-r border-b border-line px-4 py-2 last:border-r-0 md:border-b-0", flashTone === "good" && "tile-up", flashTone === "bad" && "tile-down", flashTone === "neutral" && "tile-neutral")} title={detail}>
       <span className="line-clamp-2 self-start text-[12px] leading-tight text-muted-foreground">
         {label}
         {hint && <span className="num"><Sep />{hint}</span>}
       </span>
       <span className="mt-0.5 flex min-w-0 items-baseline gap-2">
         <span className={cn("num shrink-0 text-[18px] font-semibold leading-tight tracking-[-0.01em]", tone === "pay" ? "text-pay" : tone === "ask" ? "text-ask" : "text-ink")}>{value}</span>
+        {delta ? (
+          <span className={cn("num shrink-0 rounded-[4px] px-1.5 text-[12px] font-semibold", chipTone === "good" ? "bg-pay/15 text-pay" : chipTone === "bad" ? "bg-stop/12 text-stop" : "bg-hl text-ink")} aria-label={`изменение ${delta > 0 ? "плюс" : "минус"} ${num(Math.abs(delta))}`}>
+            {delta > 0 ? "+" : "−"}
+            {num(Math.abs(delta))}
+          </span>
+        ) : null}
         {link && (
           <button onClick={link.onClick} className="inline-flex items-center gap-0.5 text-[12px] font-medium text-accent underline decoration-accent/35 underline-offset-[3px] hover:decoration-accent">
             {link.label}
             <ArrowRight className="size-3" aria-hidden />
           </button>
         )}
-        {/* в одной строке с суммой, чтобы суммы во всех плитках стояли на одном уровне; полный текст — в подсказке плитки */}
+        {/* в одной строке с суммой, чтобы суммы во всех плитках стояли на одном уровне; полный текст в подсказке плитки */}
         {extra && <span className="num min-w-0 truncate text-[11.5px] text-muted-foreground">{extra}</span>}
       </span>
     </div>

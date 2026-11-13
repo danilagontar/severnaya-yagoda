@@ -59,7 +59,7 @@ export function reasonsOf(r: Result): string[] {
   return [...out];
 }
 
-// Цвет заголовка группы — тот же, что у вердиктов (docs/palette.md): заливка 12 % поверх фона колонки.
+// Цвет заголовка группы: тот же, что у вердиктов (docs/palette.md): заливка 12 % поверх фона колонки.
 const GROUP_STYLE: Record<string, { icon: LucideIcon; color: string }> = {
   decide: { icon: CircleAlert, color: "var(--v-ask)" },
   waiting: { icon: Hourglass, color: "var(--v-dup)" },
@@ -68,7 +68,7 @@ const GROUP_STYLE: Record<string, { icon: LucideIcon; color: string }> = {
   none: { icon: Archive, color: "var(--v-dup)" },
 };
 
-// Группа зависит от вердикта и от решения бухгалтера: решённое уходит в «Решено», отправленный вопрос — в «Ждём ответа».
+// Группа зависит от вердикта и от решения бухгалтера: решённое уходит в «Решено», отправленный вопрос: в «Ждём ответа».
 // Снятое решение (вердикт изменился) не считается: документ возвращается в свою группу.
 const NO: DocStatus = { decision: null, at: null, valid: false, stale: null, waiting: false, resolved: false, inRegistry: false, amount: 0 };
 export const GROUPS: { id: string; title: string; verdicts: Verdict[]; match: (r: Result, s: DocStatus) => boolean }[] = [
@@ -80,7 +80,7 @@ export const GROUPS: { id: string; title: string; verdicts: Verdict[]; match: (r
 ];
 const ORDER: Verdict[] = ["stop", "return", "ask", "pay", "duplicate", "letter"];
 const RANK = Object.fromEntries(ORDER.map((v, i) => [v, i])) as Record<Verdict, number>;
-// Повторное нажатие на выбранную сортировку разворачивает порядок; short — подпись на кнопке «Вид»
+// Повторное нажатие на выбранную сортировку разворачивает порядок; short: подпись на кнопке «Вид»
 const SHORT: Record<SortKey, [string, string]> = {
   urgency: ["Срочные", "Несрочные"],
   amount: ["Крупные", "Мелкие"],
@@ -140,13 +140,13 @@ export function Queue({
         return (b.invoiced ?? -1) - (a.invoiced ?? -1);
       case "date":
         return receivedKey(b).localeCompare(receivedKey(a));
-      case "order": // счета одного заказа рядом; без заказа — в конце; внутри заказа — по дате
+      case "order": // счета одного заказа рядом; без заказа в конце; внутри заказа по дате
         return (a.orderId ?? "ЗП-99").localeCompare(b.orderId ?? "ЗП-99") || receivedKey(a).localeCompare(receivedKey(b));
       default:
         return RANK[a.verdict] - RANK[b.verdict] || Number(b.isNew) - Number(a.isNew);
     }
   };
-  // счётчики для меню фильтров — по всей очереди
+  // счётчики для меню фильтров: по всей очереди
   const toCounts = new Map<string, number>();
   for (const r of results) for (const k of new Set(r.addressees.map(addresseeKey))) toCounts.set(k, (toCounts.get(k) ?? 0) + 1);
   const toOptions = [...toCounts.entries()]
@@ -219,7 +219,7 @@ export function Queue({
           const items = list.filter((r) => g.match(r, st(r))).sort(cmp);
           if (!items.length) return null;
           const isCollapsed = collapsed.has(g.id) && !anyFilter; // при поиске и фильтрах группы раскрыты
-          // «Решено» — сумма в реестре; «К оплате» — по сверке; остальное — по счёту
+          // «Решено»: сумма в реестре; «К оплате»: по сверке; остальное: по счёту
           const sum = items.reduce((s, r) => s + (g.id === "resolved" ? st(r).amount : r.verdict === "pay" ? r.payNow : r.ex.kind === "letter" ? 0 : r.invoiced ?? 0), 0);
           return (
             <section key={g.id}>

@@ -11,7 +11,7 @@ import type { CaseData, Letter, Result, Verdict } from "./types";
 // ---------- события ----------
 
 export type Decision =
-  | { kind: "confirm"; amount: number } // оплатить по сверке; amount — сумма на момент подтверждения
+  | { kind: "confirm"; amount: number } // оплатить по сверке; amount: сумма на момент подтверждения
   | { kind: "waiting"; who: string } // вопрос отправлен, ждём ответа
   | { kind: "pay-override"; amount: number; reason: string } // оплатить по решению бухгалтера (правилами не решается)
   | { kind: "returned" } // счёт возвращён поставщику на исправление
@@ -118,7 +118,7 @@ export function validateDecision(r: Result, d: Decision): string | null {
     if (r.invoiced !== null && d.amount > r.invoiced + EPS) return `Сумма не может быть больше суммы счёта (${r.invoiced.toLocaleString("ru-RU")} ₽).`;
     if (!d.reason.trim()) return "Укажите причину: на чём основано решение.";
   }
-  if (d.kind === "reject" && r.verdict === "pay" && !d.reason.trim()) return "Сверка пройдена — укажите, почему не платить.";
+  if (d.kind === "reject" && r.verdict === "pay" && !d.reason.trim()) return "Сверка пройдена. Укажите, почему не платить.";
   return null;
 }
 
@@ -231,4 +231,112 @@ export function computeState(base: CaseData, events: AppEvent[], extractor?: Ext
   const results = reconcileAll(data, letters, extractor, newIds);
   const statuses = applyDecisions(results, events);
   return { data, results, statuses, registry: registryState(results, statuses, events) };
+}
+
+// ---------- хронология заказа ----------
+
+export interface TimelineItem {
+  key: string;
+  when: string; // «03.11», «12.11 09:15», «сейчас»
+  text: string;
+  source: string; // 1С:ERP, Directum RX, почта, бухгалтер
+  docId?: string; // ссылка на документ очереди
+  verdict?: Verdict;
+  simulated?: boolean; // событие из журнала (в продукте придёт из интеграции)
+}
+
+const dm = (d: string | null | undefined) => (d ? d.slice(0, 5) : "");
+// ключ сортировки «ММДДЧЧММ» из «ДД.ММ[.ГГГГ] [ЧЧ:ММ]»
+const sortKey = (d: string) => {
+  const m = d.match(/(\d{2})\.(\d{2})(?:\.\d{4})?(?:\s+(\d{2}):(\d{2}))?/);
+  return m ? `${m[2]}${m[1]}${m[3] ?? "00"}${m[4] ?? "00"}` : "99999999";
+};
+
+/**
+ * История заказа: заказ и приёмка (1С:ERP), согласования (Directum RX), счета и письма (почта) по дате,
+ * затем события журнала по этому заказу в порядке поступления.
+ */
+export function orderTimeline(base: CaseData, events: AppEvent[], results: Result[], orderId: string): TimelineItem[] {
+  const o = base.orders.find((x) => x.id === orderId);
+  if (!o) return [];
+  const dated: (TimelineItem & { k: string })[] = [];
+  dated.push({ key: "order", k: sortKey(o.date), when: dm(o.date), text: `Заказ ${o.id}: ${o.ordered.toLocaleString("ru-RU")} ${o.unit} по ${o.price.toLocaleString("ru-RU")} ₽`, source: "1С:ERP" });
+  for (const a of base.approvals.filter((x) => x.order === orderId))
+    dated.push({ key: a.id, k: sortKey(a.date), when: dm(a.date), text: `${a.id} (${a.status.toLowerCase()}): ${a.text}`, source: "Directum RX" });
+  if (o.lastAcceptance)
+    dated.push({ key: "acc", k: sortKey(o.lastAcceptance) + "9", when: dm(o.lastAcceptance), text: `Принято на складе ${o.accepted.toLocaleString("ru-RU")} ${o.unit}`, source: "1С:ERP" });
+  else dated.push({ key: "acc", k: "99999998", when: "", text: `На складе ничего не принято (срез ${base.meta.snapshot})`, source: "1С:ERP" });
+  const evLetters = new Set(events.flatMap((e) => (e.type === "letter" ? [e.letter.id] : [])));
+  for (const r of results.filter((x) => x.orderId === orderId && !evLetters.has(x.id))) {
+    const what = r.ex.kind === "letter" ? `письмо: «${r.text.replace(/\s+/g, " ").slice(0, 70)}${r.text.length > 70 ? "…" : ""}»` : `счёт ${r.ex.invoiceNo ?? "без номера"}${r.ex.qty !== null ? ` на ${r.ex.qty.toLocaleString("ru-RU")} ${r.ex.unit ?? ""}`.trimEnd() : ""}`;
+    dated.push({ key: r.id, k: sortKey(r.received), when: r.received, text: `${r.id} ${what}`, source: "почта", docId: r.id, verdict: r.verdict });
+  }
+  dated.sort((a, b) => a.k.localeCompare(b.k));
+  const out: TimelineItem[] = dated.map(({ k: _k, ...x }) => x);
+
+  // события журнала по этому заказу
+  for (const e of events) {
+    if (e.type === "acceptance" && e.order === orderId)
+      out.push({ key: e.id, when: "сейчас", text: `Приёмка +${e.qty.toLocaleString("ru-RU")} ${o.unit}`, source: "1С:ERP", simulated: true });
+    else if (e.type === "approval-signed" && base.approvals.some((a) => a.id === e.approval && a.order === orderId))
+      out.push({ key: e.id, when: "сейчас", text: `${e.approval} подписано`, source: "Directum RX", simulated: true });
+    else if (e.type === "letter") {
+      const r = results.find((x) => x.id === e.letter.id);
+      if (r?.orderId === orderId)
+        out.push({ key: e.id, when: e.letter.received, text: `${r.id} ${r.ex.kind === "letter" ? "письмо" : `счёт ${r.ex.invoiceNo ?? "без номера"}`}`, source: "почта", docId: r.id, verdict: r.verdict, simulated: true });
+    }
+  }
+  return out;
+}
+
+// ---------- показатели сводки (для плиток и меток разницы) ----------
+
+export interface Metrics {
+  registry: number; // в реестре
+  prevented: number; // не платить
+  deferred: number; // отложено
+  need: number; // требует решения
+  decided: number; // разобрано
+}
+
+export function metrics(s: PilotState): Metrics {
+  let prevented = 0,
+    deferred = 0,
+    need = 0,
+    decided = 0;
+  for (const r of s.results) {
+    for (const p of r.prevented) prevented += p.amount;
+    deferred += r.deferred;
+    const st = s.statuses.get(r.id);
+    if ((r.verdict === "stop" || r.verdict === "return" || r.verdict === "ask") && !st?.valid) need++;
+    if (r.verdict !== "duplicate" && r.verdict !== "letter" && st?.resolved) decided++;
+  }
+  return { registry: s.registry.total, prevented: round2(prevented), deferred: round2(deferred), need, decided };
+}
+
+/** Разница показателей: только изменившиеся. */
+export function metricsDelta(a: Metrics, b: Metrics): Partial<Metrics> {
+  const out: Partial<Metrics> = {};
+  for (const k of Object.keys(a) as (keyof Metrics)[]) if (Math.abs(b[k] - a[k]) > EPS) out[k] = round2(b[k] - a[k]);
+  return out;
+}
+
+/** Короткое описание события для баннера и журнала. */
+export function describeEvent(e: AppEvent): string {
+  switch (e.type) {
+    case "letter":
+      return `письмо ${e.letter.id}`;
+    case "acceptance":
+      return `приёмка +${e.qty.toLocaleString("ru-RU")} по ${e.order}`;
+    case "approval-signed":
+      return `${e.approval} подписано`;
+    case "decision":
+      return `${e.doc}: ${DECISION_LABEL[e.decision.kind].toLowerCase()}`;
+    case "reopen":
+      return `${e.doc}: возвращён в работу`;
+    case "registry-submitted":
+      return "реестр передан ФД";
+    case "registry-approved":
+      return "реестр утверждён ФД";
+  }
 }
