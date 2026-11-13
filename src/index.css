@@ -115,6 +115,9 @@ body {
 }
 ::selection { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+/* поля ввода: тонкая рамка в цвет акцента вместо двойного контура (обводка + кольцо) */
+input:not([type="checkbox"]):not([type="radio"]):focus-visible,
+textarea:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); border-radius: 6px; }
 * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 textarea { caret-color: var(--accent); }
 .num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }

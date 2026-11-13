@@ -81,7 +81,20 @@ describe("новые письма", () => {
 import { DEMO_LETTERS } from "../data/demo-letters";
 describe("демо-письма (только правила)", () => {
   // free и table — письма «для ИИ»; здесь проверяем, что без ИИ они не ломают очередь
-  const expectV: Record<string, string> = { bank: "stop", copy: "duplicate", bags: "pay", total: "return", lookalike: "stop", free: "duplicate", table: "letter" };
+  const expectV: Record<string, string> = {
+    bank: "stop",
+    copy: "duplicate",
+    bags: "pay",
+    total: "return",
+    lookalike: "stop",
+    free: "duplicate",
+    table: "letter",
+    forward: "duplicate",
+    two: "ask",
+    "same-bank": "letter",
+    quote: "duplicate",
+    typos: "duplicate",
+  };
   for (const d of DEMO_LETTERS) {
     it(`${d.title}: ${expectV[d.id]}`, () => {
       const { r, get } = run(d.sender, d.text);
@@ -99,8 +112,20 @@ describe("демо-письма (только правила)", () => {
       }
       if (d.id === "free") expect(r.duplicateOf).toBe("В-21");
       if (d.id === "table") expect(get("В-04").verdict).toBe("pay"); // без ИИ это просто письмо, очередь не меняется
+      if (d.id === "forward") {
+        expect(r.duplicateOf).toBe("В-02");
+        expect(r.supplier).toBe("Пакетная линия");
+      }
+      if (d.id === "two") expect(r.ex.otherInvoices).toEqual(["126"]);
+      if (d.id === "same-bank") expect(get("В-02").verdict).toBe("pay");
+      if (d.id === "quote") {
+        expect(r.duplicateOf).toBe("В-06");
+        expect(r.addressees.some((a) => a.role === "treasurer")).toBe(true);
+      }
+      if (d.id === "typos") expect(r.duplicateOf).toBe("В-02");
       // ни одно демо-письмо не должно просить «условия предоплаты», если всё принятое уже выставлено
-      if (d.id !== "lookalike") expect(r.findings.some((f) => f.rule === "П-5")).toBe(false);
+      // «two»: счёт 125 на непринятые 2 000 шт в пределах ЗП-07 — там П-5 законен
+      if (d.id !== "lookalike" && d.id !== "two") expect(r.findings.some((f) => f.rule === "П-5")).toBe(false);
     });
   }
 });

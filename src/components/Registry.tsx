@@ -4,6 +4,7 @@ import { INVOICES, cn, plural } from "@/lib/utils";
 import type { Result } from "@/core/types";
 import type { Summary } from "@/core/reconcile";
 import { VerdictTag, fmtRub } from "./verdict";
+import { Sep } from "@/components/sep";
 
 function csv(rows: (string | number)[][]) {
   return rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\r\n");
@@ -35,7 +36,7 @@ export function Registry({ results, summary, done, onSelect, snapshot }: { resul
               Платёжный реестр
             </h1>
             <p className="mt-1 text-[13px] text-muted-foreground">
-              На утверждение финансовому директору (П-9) · срез {snapshot} · подтверждено бухгалтером {confirmed.length} из {pay.length}
+              На утверждение финансовому директору (П-9)<Sep />срез {snapshot}<Sep />подтверждено бухгалтером {confirmed.length} из {pay.length}
             </p>
           </div>
           <Button size="sm" variant="outline" onClick={download}>
@@ -76,7 +77,7 @@ export function Registry({ results, summary, done, onSelect, snapshot }: { resul
             <tfoot>
               <tr className="border-t border-line-strong bg-surface-2">
                 <td colSpan={5} className="px-3 py-2.5 font-semibold text-ink">
-                  Итого к оплате · {pay.length} {plural(pay.length, INVOICES)}
+                  Итого к оплате<Sep />{pay.length} {plural(pay.length, INVOICES)}
                 </td>
                 <td className="num px-3 py-2.5 text-right text-[15px] font-semibold text-ink">{fmtRub(summary.payNow)}</td>
               </tr>
@@ -143,7 +144,7 @@ function PayList({ pay, done, onSelect, total }: { pay: Result[]; done: Set<stri
                 {done.has(r.id) && <Check className="size-3.5 shrink-0 text-pay" aria-label="подтверждено" />}
               </span>
               <span className="num block text-[12.5px] text-muted-foreground">
-                счёт {r.ex.invoiceNo} · {r.orderId}
+                счёт {r.ex.invoiceNo}<Sep />{r.orderId}
               </span>
             </span>
             <span className="num self-center font-medium text-ink">{fmtRub(r.payNow)}</span>
@@ -151,7 +152,7 @@ function PayList({ pay, done, onSelect, total }: { pay: Result[]; done: Set<stri
         </li>
       ))}
       <li className="flex items-baseline justify-between bg-surface-2 px-3 py-2.5 font-semibold text-ink">
-        <span>Итого · {pay.length}</span>
+        <span>Итого<Sep />{pay.length}</span>
         <span className="num text-[15px]">{fmtRub(total)}</span>
       </li>
     </ul>

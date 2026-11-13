@@ -14,6 +14,7 @@ import { EtalonView } from "@/components/EtalonView";
 import { NewLetter } from "@/components/NewLetter";
 import { LlmUsage } from "@/components/LlmUsage";
 import { VERDICT, fmtRub } from "@/components/verdict";
+import { Sep } from "@/components/sep";
 
 const data = rawData as CaseData;
 type View = "queue" | "registry" | "etalon" | "new";
@@ -261,7 +262,7 @@ export default function App() {
         />
         <Stat
           label="Требует решения"
-          hint={`стоп ${summary.byVerdict.stop} · вернуть ${summary.byVerdict.return} · вопрос ${summary.byVerdict.ask}`}
+          hint={`стоп ${summary.byVerdict.stop} | вернуть ${summary.byVerdict.return} | вопрос ${summary.byVerdict.ask}`}
           value={String(needDecision)}
           tone="ask"
           link={{
@@ -321,7 +322,7 @@ export default function App() {
               </button>
               {current && (
                 <span className="min-w-0 truncate text-muted-foreground">
-                  <span className="num font-medium text-ink">{current.id}</span> · {current.supplier ?? current.ex.senderName ?? ""}
+                  <span className="num font-medium text-ink">{current.id}</span><Sep />{current.supplier ?? current.ex.senderName ?? ""}
                 </span>
               )}
             </div>
@@ -363,7 +364,7 @@ function Stat({ label, hint, value, detail, tone, link, extra }: { label: string
     <div className="flex min-w-[150px] flex-1 flex-col justify-center border-r border-b border-line px-4 py-2 last:border-r-0 md:border-b-0" title={detail}>
       <span className="line-clamp-2 text-[12px] leading-tight text-muted-foreground">
         {label}
-        {hint && <span className="num"> · {hint}</span>}
+        {hint && <span className="num"><Sep />{hint}</span>}
       </span>
       <span className="mt-0.5 flex items-baseline gap-2">
         <span className={cn("num text-[18px] font-semibold leading-tight tracking-[-0.01em]", tone === "pay" ? "text-pay" : tone === "ask" ? "text-ask" : "text-ink")}>{value}</span>

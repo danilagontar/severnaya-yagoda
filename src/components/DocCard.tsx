@@ -8,6 +8,7 @@ import { COMPANY_DOMAIN } from "@/core/extract";
 import type { CompareRow, CrossField, FieldKey, Finding, Result } from "@/core/types";
 import { polishDraft, type LlmMode } from "@/llm/provider";
 import { VERDICT, VerdictTag, fmtRub, verdictTextColor } from "./verdict";
+import { Sep } from "@/components/sep";
 
 const ROW_FIELD: Record<CompareRow["key"], FieldKey | null> = { supplier: null, material: "material", qty: "qty", price: "price", total: "total" };
 const FIELD_LABEL: Partial<Record<FieldKey, string>> = {
@@ -194,11 +195,11 @@ export function DocCard({
       <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
           <p className="num text-[13px] text-muted-foreground">
-            {r.id} · получено {r.received} · {r.ex.senderEmail ?? r.sender}
+            {r.id}<Sep />получено {r.received}<Sep />{r.ex.senderEmail ?? r.sender}
           </p>
           <h1 id="doc-title" className="mt-1 text-[22px] font-semibold leading-tight tracking-[-0.01em] text-ink text-balance">
             {r.supplier ?? r.ex.senderName ?? "Отправитель не указан"}
-            {r.ex.invoiceNo && <span className="font-normal text-muted-foreground"> · счёт {r.ex.invoiceNo}</span>}
+            {r.ex.invoiceNo && <span className="font-normal text-muted-foreground"><Sep />счёт {r.ex.invoiceNo}</span>}
             {r.ex.kind === "correction" && <span className="font-normal text-muted-foreground"> (исправленный)</span>}
           </h1>
           <p className="mt-1 text-[13px] text-muted-foreground">
@@ -209,7 +210,7 @@ export function DocCard({
             ) : (
               BINDING[r.binding]
             )}
-            {r.orderSummary && <> · {r.orderSummary}</>}
+            {r.orderSummary && <><Sep />{r.orderSummary}</>}
           </p>
         </div>
         {/* дубли и письма-контекст решения не требуют: кнопки нет */}
@@ -383,7 +384,7 @@ export function DocCard({
                           открыть {target}
                         </button>
                       ) : (
-                        <span className="ml-1.5 text-[12px] text-muted-foreground">· {f.source}</span>
+                        <span className="text-[12px] text-muted-foreground"><Sep />{f.source}</span>
                       )
                     )}
                   </div>
@@ -456,8 +457,8 @@ export function DocCard({
               <p className="text-[13px]">
                 <span className="text-muted-foreground">Тема: </span>
                 <span className="font-medium text-ink">{draft.subject}</span>
-                <span className="text-muted-foreground"> · причина: {draft.to.reason}</span>
-                <span className="text-muted-foreground"> · кому: </span>
+                <span className="text-muted-foreground"><Sep />причина: {draft.to.reason}</span>
+                <span className="text-muted-foreground"><Sep />кому: </span>
                 {email ? <span className="num text-ink">{email}</span> : <span className="text-ask">адреса нет в данных кейса</span>}
               </p>
               <Textarea value={body} onChange={(e) => setBody(e.target.value)} rows={Math.min(14, body.split("\n").length + 1)} className="num resize-y bg-surface text-[13.5px] leading-relaxed" aria-label="Текст письма" />

@@ -3,6 +3,7 @@ import { Archive, ArrowDown, ArrowUp, Check, ChevronDown, CircleAlert, CircleChe
 import { cn } from "@/lib/utils";
 import type { Addressee, Result, Verdict } from "@/core/types";
 import { VERDICT, VerdictIcon, fmtRub } from "./verdict";
+import { Sep } from "@/components/sep";
 
 export type SortKey = "urgency" | "amount" | "date" | "order";
 export type SortDir = "default" | "reverse";
@@ -326,7 +327,7 @@ function ViewMenu({ filter, setFilter }: { filter: QueueFilter; setFilter: (f: Q
       </button>
       {open && (
         <div role="menu" className={cn(POPOVER, "right-0 w-[250px]")}>
-          <p className="px-2 pt-1 pb-1 text-[11.5px] font-medium text-muted-foreground">Сортировка · повторное нажатие разворачивает</p>
+          <p className="px-2 pt-1 pb-1 text-[11.5px] font-medium text-muted-foreground">Сортировка<Sep />повторное нажатие разворачивает</p>
           {SORTS.map((o) => {
             const on = filter.sort === o.id;
             const itemRev = filter.dirs[o.id] === "reverse";
@@ -374,7 +375,7 @@ function FilterMenu({ label, options, value, onChange }: { label: string; option
         )}
       >
         {label}
-        {value.length > 0 && <span className="num text-surface/70">· {value.length}</span>}
+        {value.length > 0 && <span className="num text-surface/70">| {value.length}</span>}
         <ChevronDown className="size-3.5 opacity-70" aria-hidden />
       </button>
       {open && (

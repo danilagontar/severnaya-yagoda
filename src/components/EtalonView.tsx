@@ -4,6 +4,7 @@ import { ETALON, ETALON_TOTALS } from "@/core/etalon";
 import type { Result } from "@/core/types";
 import type { Summary } from "@/core/reconcile";
 import { VerdictTag, fmtRub } from "./verdict";
+import { Sep } from "@/components/sep";
 
 export function EtalonView({ base, summary, onSelect }: { base: Result[]; summary: Summary; onSelect: (id: string) => void }) {
   const rows = ETALON.map((e) => {
@@ -81,7 +82,7 @@ export function EtalonView({ base, summary, onSelect }: { base: Result[]; summar
                 {r?.orderId}
                 {e.due !== null && (
                   <>
-                    {" · "}должно {fmtRub(e.due)} · <span className={okDue ? "text-ink" : "font-semibold text-stop"}>пилот {fmtRub(r?.due)}</span>
+                    <Sep />должно {fmtRub(e.due)}<Sep /><span className={okDue ? "text-ink" : "font-semibold text-stop"}>пилот {fmtRub(r?.due)}</span>
                   </>
                 )}
               </span>
