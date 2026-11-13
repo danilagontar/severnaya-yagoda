@@ -209,7 +209,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
     payNow: 0,
     verdict: "ask",
     headline: "",
-    findings: [],
+    findings: extractionNotes(ex),
     addressees: [],
     related: [],
     prevented: [],
@@ -495,6 +495,21 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
     finalizeVerdict(r, arithmeticError);
   }
 
+  // --- в одном письме несколько счетов: разобран только первый, остальные не должны потеряться молча
+  for (const r of results) {
+    const more = r.ex.otherInvoices ?? [];
+    if (!more.length) continue;
+    const text = `В письме несколько счетов: ${[r.ex.invoiceNo, ...more].join(", ")}. Разобран только счёт ${r.ex.invoiceNo}, остальные нужно завести отдельными документами и проверить.`;
+    r.findings.unshift({ rule: "П-1", level: "ask", text });
+    if (r.verdict === "pay" || r.verdict === "duplicate") {
+      r.verdict = "ask";
+      r.payNow = 0;
+      r.headline = text;
+      r.duplicateOf = undefined;
+      r.prevented = [];
+    }
+  }
+
   // --- сводка по заказу: «выставлено X из Y»
   for (const o of orders) {
     const list = results.filter((r) => r.orderId === o.id && r.verdict !== "duplicate" && r.verdict !== "stop" && r.binding !== "probable");
@@ -571,6 +586,8 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
       r.headline = tIds ? `Письмо поставщика, контекст к ${tIds}` : "Письмо без счёта, связанный счёт не найден";
     }
     if (!targets.length && ex.topic !== "other") r.findings.push({ rule: "П-1", level: "info", text: "Связанный счёт в очереди не найден." });
+    if (ex.otherInvoices?.length)
+      r.findings.push({ rule: "П-1", level: "info", text: `Письмо упоминает несколько счетов: ${[ex.invoiceNo ?? ex.invoiceRef, ...ex.otherInvoices].filter(Boolean).join(", ")}.` });
     r.compare = compareRows(r, order, null, approvals, null);
   }
 
@@ -579,6 +596,14 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
 
   const order = new Map(letters.map((l, i) => [l.id, i]));
   return results.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+}
+
+/** Как письмо было прочитано: переслано, счёт из цитаты. Показывается в карточке. */
+function extractionNotes(ex: Extracted): Finding[] {
+  const out: Finding[] = [];
+  if (ex.forwardedBy) out.push({ rule: "Разбор", level: "info", text: `Письмо переслано (${ex.forwardedBy}). Поставщик и счёт взяты из пересланной части.` });
+  if (ex.fromQuote) out.push({ rule: "Разбор", level: "info", text: "Счёт есть только в цитате ответа поставщика: считаем это повторной отправкой." });
+  return out;
 }
 
 function finalizeVerdict(r: Result, arithmeticError: boolean) {
@@ -618,7 +643,7 @@ function compareRows(
   const shortUnit = ex.unit ? ({ мешок: "меш.", рулон: "рул.", пачка: "пач.", упаковка: "упак." } as Record<string, string>)[ex.unit] ?? ex.unit : "";
   const invQty = ex.qty !== null ? `${num(ex.qty)} ${shortUnit}`.trim() + (conv && ex.pack ? ` → ${num(conv.qty)} ${o?.unit}` : "") : null;
   const invPrice = ex.price !== null ? `${num(ex.price)} ₽` + (conv && ex.pricePer === "pack" ? ` → ${num(round2(conv.price))} ₽/${o?.unit}` : "") : null;
-  const apprTxt = (a?: ParsedApproval, what?: string) => (a ? `${a.id}: ${what} · ${a.signed ? "подписано" : a.status.toLowerCase()}${a.effectiveFrom ? ` · с ${a.effectiveFrom}` : ""}` : null);
+  const apprTxt = (a?: ParsedApproval, what?: string) => (a ? `${a.id}: ${what} | ${a.signed ? "подписано" : a.status.toLowerCase()}${a.effectiveFrom ? ` | с ${a.effectiveFrom}` : ""}` : null);
 
   const rows: CompareRow[] = [
     {
@@ -645,7 +670,7 @@ function compareRows(
       label: "Количество",
       order: o ? `${num(o.ordered)} ${o.unit}` : null,
       approval: qtyAppr ? apprTxt(qtyAppr, `${num(qtyAppr.newQty!)} ${o!.unit}`) : null,
-      acceptance: o ? `${num(o.accepted)} ${o.unit}${o.lastAcceptance ? ` · ${o.lastAcceptance.slice(0, 5)}` : ""}` : null,
+      acceptance: o ? `${num(o.accepted)} ${o.unit}${o.lastAcceptance ? ` | ${o.lastAcceptance.slice(0, 5)}` : ""}` : null,
       invoice: invQty,
       status: !o || ex.qty === null ? "none" : r.findings.some((f) => (f.rule === "П-4" || f.rule === "П-6" || f.rule === "П-3") && f.level === "ask" && /принят|выставлено|сверх/.test(f.text)) ? "bad" : "ok",
       note: calc && conv && calc.billable < conv.qty ? `к оплате ${num(calc.billable)} ${o?.unit}` : undefined,

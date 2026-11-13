@@ -119,6 +119,9 @@ export interface Extracted {
   approvalClaimDate: string | null; // ДД.ММ
   promise: string | null; // «привезём до 20.11»
   asksPaymentDate: boolean;
+  otherInvoices?: string[]; // ещё номера счетов в этом же письме (разобран только первый)
+  forwardedBy?: string | null; // письмо переслано (закупщиком): кто переслал
+  fromQuote?: boolean; // счёт взят из цитаты в ответе поставщика
   spans: Partial<Record<FieldKey, Span>>;
   missing: FieldKey[]; // что ожидалось для счёта, но не найдено
 }
