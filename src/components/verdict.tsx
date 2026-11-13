@@ -2,7 +2,7 @@ import { CircleCheck, CircleHelp, Undo2, CopyX, Mail, type LucideIcon } from "lu
 import { cn } from "@/lib/utils";
 import type { Verdict } from "@/core/types";
 
-// «Стоп» — единственный вердикт с залитым знаком: красный только внутри восьмиугольника, без внешней заливки.
+// «Стоп»: единственный вердикт с залитым знаком: красный только внутри восьмиугольника, без внешней заливки.
 function StopIcon({ className }: { className?: string; strokeWidth?: number }) {
   return (
     // одна SVG в сетке 24×24, как у Lucide: восьмиугольник и крест в общей системе координат, без сдвига при округлении
@@ -23,7 +23,7 @@ export const VERDICT: Record<Verdict, Meta> = {
   letter: { label: "Письмо", long: "Письмо, контекст", icon: Mail, text: "text-letter", bg: "bg-letter/10", ring: "ring-letter/25" },
 };
 
-/** Цвет вердикта для текста вне метки (у «стопа» — красный). */
+/** Цвет вердикта для текста вне метки (у «стопа»: красный). */
 export const verdictTextColor = (v: Verdict) => (v === "stop" ? "text-stop" : VERDICT[v].text);
 
 export function VerdictIcon({ v, className }: { v: Verdict; className?: string }) {

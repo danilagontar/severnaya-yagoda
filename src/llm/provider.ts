@@ -1,7 +1,7 @@
 // Место подключения LLM (GigaChat через серверный прокси /api/llm, см. server/ и docs/llm.md).
 // LLM только (1) извлекает поля из текста письма и (2) переписывает черновик письма.
 // Всё, что вернула модель, проверяется: числа должны встречаться в исходном тексте.
-// При любой ошибке — откат на правила.
+// При любой ошибке: откат на правила.
 
 import { extractByRules } from "@/core/extract";
 import { numbersIn, type Draft } from "@/core/drafts";
@@ -28,7 +28,7 @@ export interface LlmUsage {
   last: { at: string; purpose: string; total: number } | null;
 }
 
-/** Расход токенов с момента запуска dev-сервера; balance — остаток из GigaChat (только при пакетах токенов). */
+/** Расход токенов с момента запуска dev-сервера; balance: остаток из GigaChat (только при пакетах токенов). */
 export async function getUsage(withBalance = false): Promise<{ usage: LlmUsage; balance: { ok: boolean; data?: unknown; error?: string } | null } | null> {
   try {
     const r = await fetch(`/api/llm/usage${withBalance ? "?balance=1" : ""}`);
@@ -68,7 +68,7 @@ export async function extractWithLlm(text: string, sender: string, model = "ИИ
       else if (f.key === "price") ex.price = json.price;
       else if (f.key === "total") ex.total = json.total;
       else if (f.key === "material") ex.material = json.material;
-      else (ex as unknown as Record<string, unknown>)[f.key] = f.llm; // номер счёта, заказ, дата — в нормализованном виде
+      else (ex as unknown as Record<string, unknown>)[f.key] = f.llm; // номер счёта, заказ, дата в нормализованном виде
     }
     if (ex.qty !== null && !ex.unit && typeof json.unit === "string") ex.unit = json.unit;
     if (ex.price !== null && !ex.pricePer && (json.pricePer === "unit" || json.pricePer === "pack")) ex.pricePer = json.pricePer;
@@ -89,7 +89,7 @@ export async function extractWithLlm(text: string, sender: string, model = "ИИ
         }
       }
     }
-    // правила не увидели счёт (не нашли сумму), а модель достроила проверенные поля — это счёт
+    // правила не увидели счёт (не нашли сумму), а модель достроила проверенные поля: это счёт
     const hasMoney = ex.total !== null || (ex.qty !== null && ex.price !== null);
     if (ex.kind === "letter" && ex.topic !== "buyer-note" && ex.invoiceNo && hasMoney) {
       ex.kind = ex.resend ? "copy" : /исправленн/i.test(text) ? "correction" : "invoice";
@@ -162,7 +162,7 @@ export function compareExtractions(text: string, base: Extracted, llm: Record<st
 }
 
 /**
- * «Очеловечить» черновик. ИИ пишет только вступление и концовку — без чисел и без пересказа пунктов.
+ * «Очеловечить» черновик. ИИ пишет только вступление и концовку: без чисел и без пересказа пунктов.
  * Приветствие, пункты с фактами, суммы, просьба и подпись остаются из шаблона кода.
  * Ответ с цифрами или с «опасными» утверждениями (оплачено, долг, штраф…) отклоняется.
  */
@@ -189,8 +189,10 @@ export async function polishDraft(d: Draft, verdict?: Verdict): Promise<{ body: 
     );
     const j = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1)) as { intro?: string; outro?: string };
     // приветствие и «С уважением» уже есть в шаблоне: срезаем, если модель всё же их написала
-    const intro = (j.intro ?? "").replace(/^(добрый\s+(день|вечер|утро)|здравствуйте)[^.!]*[.!]\s*/i, "").trim();
-    const outro = (j.outro ?? "").replace(/\s*с\s+уважением[,.!]?\s*$/i, "").trim();
+    // длинное тире в интерфейсе не используем (docs/decisions.md): если модель всё же поставила, заменяем запятой
+    const noDash = (x: string) => x.replace(/\s*—\s*/g, ", ");
+    const intro = noDash(j.intro ?? "").replace(/^(добрый\s+(день|вечер|утро)|здравствуйте)[^.!]*[.!]\s*/i, "").trim();
+    const outro = noDash(j.outro ?? "").replace(/\s*с\s+уважением[,.!]?\s*$/i, "").trim();
     if (!intro || !outro) return { body: d.body, note: "ИИ вернул неполный ответ, оставлен шаблон" };
     const all = `${intro} ${outro}`;
     if (/\d/.test(all)) return { body: d.body, note: "ИИ добавил числа, оставлен шаблон" };

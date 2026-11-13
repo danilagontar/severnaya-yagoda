@@ -15,14 +15,14 @@ function withLlm(llm: Record<string, unknown>): Extracted {
 }
 
 describe("сверка разборов", () => {
-  it("модель прочитала так же — все поля совпали, вердикт прежний", () => {
+  it("модель прочитала так же: все поля совпали, вердикт прежний", () => {
     const ex = withLlm({ invoiceNo: "202", orderNo: "ЗП-06", material: "пакет 300 г", qty: 5000, unit: "шт", price: 3, total: 15000 });
     expect(ex.crossCheck!.matched).toBe(ex.crossCheck!.compared);
     const r = reconcileAll(D, D.letters, (t, s) => (t === v02.text ? ex : extractByRules(t, s))).find((x) => x.id === "В-02")!;
     expect(r.verdict).toBe("pay");
   });
 
-  it("расхождение в итоге — поле помечено, счёт уходит в «вопрос»", () => {
+  it("расхождение в итоге: поле помечено, счёт уходит в «вопрос»", () => {
     const ex = withLlm({ invoiceNo: "202", orderNo: "ЗП-06", qty: 5000, price: 3, total: 1500 });
     expect(ex.crossCheck!.fields.find((f) => f.key === "total")!.status).toBe("llm-rejected"); // 1500 нет в тексте
     const ex2 = withLlm({ invoiceNo: "202", orderNo: "ЗП-06", qty: 300, price: 3, total: 15000 }); // 300 есть в тексте («пакет 300 г»)

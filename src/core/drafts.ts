@@ -77,7 +77,7 @@ export function buildDraft(r: Result, to: Addressee, all: Result[]): Draft {
   return { to, subject, body: lines.join("\n") };
 }
 
-/** Все числа (с разрядами) из текста — для проверки, что LLM не изменила суммы. */
+/** Все числа (с разрядами) из текста: для проверки, что LLM не изменила суммы. */
 export function numbersIn(s: string): string[] {
   return (s.match(/\d[\d   ]*(?:[.,]\d+)?/g) ?? []).map((x) => x.replace(/[   ]/g, "")).filter((x) => x.length > 1);
 }

@@ -1,5 +1,5 @@
 // Извлечение полей из свободного текста письма правилами (без сети).
-// Тот же результат (Extracted) может вернуть LLM — см. src/llm.
+// Тот же результат (Extracted) может вернуть LLM: см. src/llm.
 
 import type { Extracted, FieldKey, LetterTopic, Packaging, Span } from "./types";
 
@@ -8,7 +8,7 @@ export const COMPANY_DOMAIN = "sev-yagoda.example";
 const NUM_PLAIN = String.raw`\d[\d   ]*(?:[.,]\d+)?`;
 const RUB = String.raw`(?:руб(?:\.|лей|ля)?|₽|р\.)`;
 
-// «15.000,00» — тысячи через точку (ровно по три цифры), иначе обычная запись: «15 000,00», «4.40»
+// «15.000,00»: тысячи через точку (ровно по три цифры), иначе обычная запись: «15 000,00», «4.40»
 const NUM = String.raw`(?:\d{1,3}(?:\.\d{3})+(?:,\d+)?(?![\d.])|${NUM_PLAIN})`;
 
 export function parseNum(s: string): number {
@@ -54,7 +54,7 @@ export function fixHomoglyphs(t: string): string {
 const INV_RE = String.raw`(?<!по\s)(?<!расч[её]тн[а-яё]*\s+)(?<![а-яё\/])(сч[её]т(?:а|ов|-фактур[а-яё]*)?|сч\.)\s*(?:№|номер)?\s*(\d{1,10}(?:\/\d+)?)(?![\d\/])`;
 const stripZeros = (n: string) => n.replace(/^0+(?=\d)/, "");
 
-/** Все номера счетов в тексте: первый — основной, остальные — «ещё счета в этом письме». */
+/** Все номера счетов в тексте: первый: основной, остальные: «ещё счета в этом письме». */
 function invoiceNumbers(text: string): { no: string; m: RegExpExecArray }[] {
   const out: { no: string; m: RegExpExecArray }[] = [];
   const seen = new Set<string>();
@@ -79,7 +79,7 @@ function extractPart(raw: string, sender: string): Extracted {
   const text = fixHomoglyphs(raw);
   const spans: Partial<Record<FieldKey, Span>> = {};
   const s = parseSender(sender);
-  // если отправителя не указали отдельно — ищем «Название» в самом тексте
+  // если отправителя не указали отдельно: ищем «Название» в самом тексте
   if (!s.name) {
     const q = text.match(/«([^»]+)»/);
     if (q) s.name = q[1];
@@ -331,7 +331,7 @@ export function extractByRules(text: string, sender: string): Extracted {
     return { ...inner, forwardedBy: own.senderName ?? sender };
   }
 
-  // ответ с цитатой: счёт только в цитате → повторная отправка; сигналы («стоп», обещания) — только из своего текста
+  // ответ с цитатой: счёт только в цитате → повторная отправка; сигналы («стоп», обещания): только из своего текста
   const quoted = shiftSpans(extractPart(text.slice(cut), sender), cut);
   if (hasInvoice(quoted) && own.topic !== "buyer-note") {
     const spans = { ...quoted.spans };

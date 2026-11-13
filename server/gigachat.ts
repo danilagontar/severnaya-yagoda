@@ -44,7 +44,7 @@ function recordUsage(purpose: string, u?: { prompt_tokens?: number; completion_t
   }
 }
 
-/** Остаток токенов. Документация: доступно только при купленных пакетах, при pay-as-you-go — 403. */
+/** Остаток токенов. Документация: доступно только при купленных пакетах, при pay-as-you-go: 403. */
 export async function balance(env: GigaEnv): Promise<{ ok: boolean; data?: unknown; error?: string }> {
   try {
     const ca = loadCa(env);
@@ -102,7 +102,7 @@ async function getToken(env: GigaEnv, ca?: Buffer): Promise<string> {
   );
   if (res.status !== 200) throw new Error(`GigaChat OAuth ${res.status}: ${res.text.slice(0, 200)}`);
   const j = JSON.parse(res.text) as { access_token: string; expires_at?: number };
-  // expires_at в миллисекундах; если поля нет — токен живёт 30 минут
+  // expires_at в миллисекундах; если поля нет: токен живёт 30 минут
   cached = { token: j.access_token, expiresAt: j.expires_at ?? Date.now() + 30 * 60_000 };
   return cached.token;
 }
@@ -118,7 +118,7 @@ export async function chat(env: GigaEnv, system: string, user: string, purpose =
       { role: "user", content: user },
     ],
   });
-  // 429 Too Many Requests: бесплатный тариф ограничивает частоту — повторяем с паузой 1,5 / 3 / 6 с.
+  // 429 Too Many Requests: бесплатный тариф ограничивает частоту: повторяем с паузой 1,5 / 3 / 6 с.
   let res = { status: 0, text: "" };
   for (const wait of [0, 1500, 3000, 6000]) {
     if (wait) await new Promise((r) => setTimeout(r, wait));

@@ -476,8 +476,8 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
         r.findings.push({ rule: "П-4", level: "ask", text: `Счёт на ${num(conv.qty)} ${order.unit}, к оплате доступно ${num(remaining)} (${parts.join(", ")}).`, source: order.id });
       }
       if (ex.promise) r.findings.push({ rule: "П-4", level: "info", text: `Обещание «${ex.promise}» приёмкой не считается.` });
-      // П-5 — только если часть счёта в пределах заказа, но ещё не принята (это и есть предоплата).
-      // Если всё принятое уже выставлено и счёт выходит за заказ — это лишний счёт (П-3, сводка по заказу ниже).
+      // П-5: только если часть счёта в пределах заказа, но ещё не принята (это и есть предоплата).
+      // Если всё принятое уже выставлено и счёт выходит за заказ: это лишний счёт (П-3, сводка по заказу ниже).
       const prepaid = Math.min(before + conv.qty, approvedQty) > Math.max(before, order.accepted) + EPS;
       if (prepaid) {
         r.findings.push({ rule: "П-5", level: "ask", text: "Предоплата возможна только по договору. Условий в выгрузке нет, запросить у закупщика." });
@@ -527,7 +527,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
       const text = `По ${o.id} на ${num(approvedQty)} ${o.unit} выставлено ${num(sum)}: счета ${list.map((x) => x.id).join(", ")}.`;
       for (const r of list) {
         if (over.includes(r)) r.findings.push({ rule: "П-3", level: "ask", text, source: o.id });
-        else r.findings.push({ rule: "П-3", level: "info", text: `${text} Этот счёт в пределах заказа и приёмки${overIds.length ? `, лишнее — в ${overIds.join(", ")}` : ""}.`, source: o.id });
+        else r.findings.push({ rule: "П-3", level: "info", text: `${text} Этот счёт в пределах заказа и приёмки${overIds.length ? `, лишнее в ${overIds.join(", ")}` : ""}.`, source: o.id });
       }
     }
   }

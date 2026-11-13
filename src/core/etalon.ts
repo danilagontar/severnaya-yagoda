@@ -6,14 +6,14 @@ export type EtalonRow = {
   verdict: Verdict;
   order: string | null;
   invoiced: number | null;
-  due: number | null; // «Должно быть» из эталона; null — не применимо
+  due: number | null; // «Должно быть» из эталона; null: не применимо
   to: Role[]; // адресаты (роли)
   rules?: string[]; // правила, которые должны прозвучать в причинах
   related?: string[];
   binding?: "number" | "attributes" | "probable";
 };
 
-// Отличия от буквы эталона — решения команды (docs/decisions.md):
+// Отличия от буквы эталона: решения команды (docs/decisions.md):
 //  - В-13, В-21: в эталоне «⚠️/↩️» → «вопрос» закупщику (как В-10).
 //  - В-25: в эталоне «🚫/ℹ️» → «стоп»: письмо требует эскалации ФД, а не просто контекст.
 export const ETALON: EtalonRow[] = [
