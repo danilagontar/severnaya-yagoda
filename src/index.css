@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Палитра — docs/palette.md. Светлая тема по умолчанию. */
+:root {
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-2: #f1f3f6;
+  --border: #e4e7ec;
+  --border-strong: #cfd4dc;
+  --text: #1f2430;
+  --text-muted: #5b6472;
+  --accent: #7a1f3d;
+  --accent-fg: #ffffff;
+  --rail: #1f2430;
+  --rail-fg: #e6e8ec;
+  --rail-muted: #9aa3b2;
+  --rail-active: #d9718f; /* полоска активной вкладки: 5 : 1 к шапке в обеих темах */
+  --cta: #8c2a4a; /* «Новое письмо»: одинаковая в обеих темах, белый текст 8,3 : 1 */
+  --cta-hover: #7a1f3d;
+
+  --v-pay: #1e7b4f;
+  --v-ask: #946200;
+  --v-return: #b54708;
+  --v-stop: #b42318;
+  --v-dup: #667085;
+  --v-letter: #5b6472;
+
+  --hl: #fff2c2; /* подсветка исходного фрагмента письма */
+  --hl-ring: #946200;
+  color-scheme: light;
+}
+.dark {
+  --bg: #111318;
+  --surface: #1a1d24;
+  --surface-2: #20242c;
+  --border: #2a2f38;
+  --border-strong: #3a404b;
+  --text: #e6e8ec;
+  --text-muted: #9aa3b2;
+  --accent: #d9718f;
+  --accent-fg: #111318;
+  --rail: #0b0d11;
+  --rail-fg: #e6e8ec;
+  --rail-muted: #9aa3b2;
+  --rail-active: #d9718f;
+  --cta: #8c2a4a;
+  --cta-hover: #9b3356;
+
+  --v-pay: #3fb97a;
+  --v-ask: #d9a53a;
+  --v-return: #e8834a;
+  --v-stop: #f0645a;
+  --v-dup: #98a2b3;
+  --v-letter: #9aa3b2;
+
+  --hl: #4a3a10;
+  --hl-ring: #d9a53a;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-ink: var(--text);
+  /* имена shadcn/ui → токены палитры */
+  --color-background: var(--surface);
+  --color-foreground: var(--text);
+  --color-muted: var(--surface-2);
+  --color-muted-foreground: var(--text-muted);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-fg);
+  --color-secondary: var(--surface-2);
+  --color-secondary-foreground: var(--text);
+  --color-border: var(--border);
+  --color-input: var(--border-strong);
+  --color-ring: var(--accent);
+  --color-destructive: var(--v-stop);
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--text);
+  --radius: 6px;
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-rail: var(--rail);
+  --color-rail-fg: var(--rail-fg);
+  --color-rail-muted: var(--rail-muted);
+  --color-rail-active: var(--rail-active);
+  --color-cta: var(--cta);
+  --color-cta-hover: var(--cta-hover);
+  --color-pay: var(--v-pay);
+  --color-ask: var(--v-ask);
+  --color-return: var(--v-return);
+  --color-stop: var(--v-stop);
+  --color-dup: var(--v-dup);
+  --color-letter: var(--v-letter);
+  --color-hl: var(--hl);
+  --color-hl-ring: var(--hl-ring);
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Roboto", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+textarea { caret-color: var(--accent); }
+.num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+mark.src { background: transparent; color: inherit; border-radius: 3px; box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--hl-ring) 55%, transparent); transition: background-color 160ms cubic-bezier(.16,1,.3,1), box-shadow 160ms cubic-bezier(.16,1,.3,1); }
+mark.src[data-on="true"] { background: var(--hl); box-shadow: 0 0 0 2px var(--hl-ring); }
+/* мягкая смена подписи сортировки */
+@keyframes swap-in { from { opacity: 0; transform: translateY(3px); } }
+.anim-swap { display: inline-block; animation: swap-in 180ms cubic-bezier(.16,1,.3,1); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

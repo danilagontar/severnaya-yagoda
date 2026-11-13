@@ -1,0 +1,10 @@
+# секреты и локальные файлы на Vercel не отправляем
+.env
+.env.*
+!.env.example
+certs/
+logs/
+node_modules/
+dist/
+.claude/
+.impeccable/

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.env.local
+certs/
+logs/
+
+.vercel
+.env*
+
+!.env.example
+*.tsbuildinfo
+.claude/settings.local.json
