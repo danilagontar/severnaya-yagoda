@@ -199,7 +199,7 @@ export function DocCard({
           </p>
           <h1 id="doc-title" className="mt-1 text-[22px] font-semibold leading-tight tracking-[-0.01em] text-ink text-balance">
             {r.supplier ?? r.ex.senderName ?? "Отправитель не указан"}
-            {r.ex.invoiceNo && <span className="font-normal text-muted-foreground"><Sep />счёт {r.ex.invoiceNo}</span>}
+            {r.ex.invoiceNo && <span className="font-normal"><Sep />счёт {r.ex.invoiceNo}</span>}
             {r.ex.kind === "correction" && <span className="font-normal text-muted-foreground"> (исправленный)</span>}
           </h1>
           <p className="mt-1 text-[13px] text-muted-foreground">

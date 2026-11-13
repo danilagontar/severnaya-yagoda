@@ -242,7 +242,8 @@ export default function App() {
       </header>
 
       {/* Итоги очереди */}
-      <section aria-label="Итоги очереди" className="flex shrink-0 flex-wrap items-stretch border-b border-line bg-surface">
+      {/* Сетка: у плиток одного ряда общая строка подписей и общая строка сумм — всё на одном уровне, даже если подпись переносится */}
+      <section aria-label="Итоги очереди" className="grid shrink-0 grid-cols-[repeat(auto-fit,minmax(150px,1fr))] border-b border-line bg-surface">
         <Stat label="К оплате сейчас" hint={`${summary.payNowCount} ${plural(summary.payNowCount, INVOICES)}`} value={fmtRub(summary.payNow)} tone="pay" link={{ label: "реестр", onClick: () => setView("registry") }} />
         <Stat
           label="Не платить"
@@ -257,7 +258,7 @@ export default function App() {
           label="Отложено"
           hint="не экономия"
           value={fmtRub(summary.deferred)}
-          extra={summary.held > 0 ? `+ задержано ${fmtRub(summary.held)} (реквизиты)` : undefined}
+          extra={summary.held > 0 ? `+ задержано ${fmtRub(summary.held)}` : undefined}
           detail={`До приёмки на складе или ответа закупщика. Эти деньги заплатят позже, это не экономия.${summary.held > 0 ? `\nОтдельно задержано ${num(summary.held)} ₽: сверка пройдена, но поставщику пишут о смене реквизитов (П-2).` : ""}`}
         />
         <Stat
@@ -361,21 +362,22 @@ const num = (n: number) => n.toLocaleString("ru-RU");
 
 function Stat({ label, hint, value, detail, tone, link, extra }: { label: string; hint?: string; value: string; detail?: string; tone?: "pay" | "ask"; link?: { label: string; onClick: () => void }; extra?: string }) {
   return (
-    <div className="flex min-w-[150px] flex-1 flex-col justify-center border-r border-b border-line px-4 py-2 last:border-r-0 md:border-b-0" title={detail}>
-      <span className="line-clamp-2 text-[12px] leading-tight text-muted-foreground">
+    <div className="row-span-2 grid min-w-0 grid-rows-subgrid border-r border-b border-line px-4 py-2 last:border-r-0 md:border-b-0" title={detail}>
+      <span className="line-clamp-2 self-start text-[12px] leading-tight text-muted-foreground">
         {label}
         {hint && <span className="num"><Sep />{hint}</span>}
       </span>
-      <span className="mt-0.5 flex items-baseline gap-2">
-        <span className={cn("num text-[18px] font-semibold leading-tight tracking-[-0.01em]", tone === "pay" ? "text-pay" : tone === "ask" ? "text-ask" : "text-ink")}>{value}</span>
+      <span className="mt-0.5 flex min-w-0 items-baseline gap-2">
+        <span className={cn("num shrink-0 text-[18px] font-semibold leading-tight tracking-[-0.01em]", tone === "pay" ? "text-pay" : tone === "ask" ? "text-ask" : "text-ink")}>{value}</span>
         {link && (
           <button onClick={link.onClick} className="inline-flex items-center gap-0.5 text-[12px] font-medium text-accent underline decoration-accent/35 underline-offset-[3px] hover:decoration-accent">
             {link.label}
             <ArrowRight className="size-3" aria-hidden />
           </button>
         )}
+        {/* в одной строке с суммой, чтобы суммы во всех плитках стояли на одном уровне; полный текст — в подсказке плитки */}
+        {extra && <span className="num min-w-0 truncate text-[11.5px] text-muted-foreground">{extra}</span>}
       </span>
-      {extra && <span className="num mt-0.5 text-[11.5px] leading-tight text-muted-foreground">{extra}</span>}
     </div>
   );
 }

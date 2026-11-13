@@ -10,6 +10,7 @@ export function LlmUsage({ mode, model, tick }: { mode: LlmMode; model: string |
   const [bal, setBal] = useState<{ ok: boolean; data?: unknown; error?: string } | null>(null);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [top, setTop] = useState(0); // для телефона: панель под кнопкой, во всю ширину экрана
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -42,7 +43,8 @@ export function LlmUsage({ mode, model, tick }: { mode: LlmMode; model: string |
   return (
     <div ref={ref} className="relative">
       <button
-        onClick={() => {
+        onClick={(e) => {
+          setTop(e.currentTarget.getBoundingClientRect().bottom + 8);
           setOpen(!open);
           if (!open) refresh();
         }}
@@ -56,7 +58,9 @@ export function LlmUsage({ mode, model, tick }: { mode: LlmMode; model: string |
         <span className="hidden sm:inline">ток.</span>
       </button>
       {open && (
-        <div className="absolute top-10 right-0 z-30 w-[300px] rounded-[8px] border border-line bg-surface p-3 text-[13px] text-ink shadow-[0_8px_24px_rgba(16,18,24,0.18)]">
+        <div
+          style={{ "--pop-top": `${top}px` } as React.CSSProperties}
+          className="fixed inset-x-4 top-[var(--pop-top)] z-30 max-h-[calc(100dvh-var(--pop-top)-16px)] overflow-y-auto rounded-[8px] sm:absolute sm:inset-x-auto sm:top-10 sm:right-0 sm:max-h-none sm:w-[300px] border border-line bg-surface p-3 text-[13px] text-ink shadow-[0_8px_24px_rgba(16,18,24,0.18)]">
           <div className="mb-2 flex items-center justify-between">
             <p className="font-semibold">Расход ИИ</p>
             <button onClick={refresh} className="grid size-7 place-items-center rounded hover:bg-surface-2" aria-label="Обновить">
