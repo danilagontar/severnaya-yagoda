@@ -9,6 +9,8 @@ import type { CompareRow, CrossField, FieldKey, Finding, Result } from "@/core/t
 import { polishDraft, type LlmMode } from "@/llm/provider";
 import { VERDICT, VerdictTag, fmtRub, verdictTextColor } from "./verdict";
 import { Sep } from "@/components/sep";
+import { DecisionPanel } from "@/components/DecisionPanel";
+import type { Decision, DocStatus } from "@/core/events";
 
 const ROW_FIELD: Record<CompareRow["key"], FieldKey | null> = { supplier: null, material: "material", qty: "qty", price: "price", total: "total" };
 const FIELD_LABEL: Partial<Record<FieldKey, string>> = {
@@ -112,16 +114,16 @@ export function DocCard({
   r,
   all,
   onSelect,
-  done,
-  onDone,
+  status,
+  onDecide,
   llm,
   onCrossCheck,
 }: {
   r: Result;
   all: Result[];
   onSelect: (id: string) => void;
-  done: boolean;
-  onDone: (id: string, v: boolean) => void;
+  status: DocStatus;
+  onDecide: (d: Decision | null) => string | null;
   llm: LlmMode;
   onCrossCheck: (r: Result) => Promise<void>;
 }) {
@@ -213,15 +215,6 @@ export function DocCard({
             {r.orderSummary && <><Sep />{r.orderSummary}</>}
           </p>
         </div>
-        {/* дубли и письма-контекст решения не требуют: кнопки нет */}
-        {r.verdict !== "duplicate" && r.verdict !== "letter" && (
-          <div className="flex items-center gap-2">
-            <Button variant={done ? "outline" : "default"} size="sm" onClick={() => onDone(r.id, !done)}>
-              {done ? <RotateCcw /> : <Check />}
-              {done ? "Вернуть в работу" : r.verdict === "pay" ? "Подтвердить в реестр" : "Отметить решённым"}
-            </Button>
-          </div>
-        )}
       </header>
 
       {/* Вердикт */}
@@ -248,6 +241,9 @@ export function DocCard({
           </dl>
         )}
       </section>
+
+      {/* Решение бухгалтера: дубли и письма-контекст решения не требуют */}
+      <DecisionPanel key={r.id + r.verdict} r={r} status={status} onDecide={onDecide} />
 
       {/* Сверка: Заказ / Согласование / Приёмка / Счёт */}
       {!isLetter && r.compare.length > 0 && (

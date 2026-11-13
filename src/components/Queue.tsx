@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Archive, ArrowDown, ArrowUp, Check, ChevronDown, CircleAlert, CircleCheck, EyeOff, Search, SlidersHorizontal, X, type LucideIcon } from "lucide-react";
+import { Archive, ArrowDown, ArrowUp, Check, CheckCheck, ChevronDown, CircleAlert, CircleCheck, EyeOff, Hourglass, Search, SlidersHorizontal, X, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Addressee, Result, Verdict } from "@/core/types";
+import { DECISION_LABEL, type DocStatus } from "@/core/events";
 import { VERDICT, VerdictIcon, fmtRub } from "./verdict";
 import { Sep } from "@/components/sep";
 
@@ -61,14 +62,21 @@ export function reasonsOf(r: Result): string[] {
 // Цвет заголовка группы — тот же, что у вердиктов (docs/palette.md): заливка 12 % поверх фона колонки.
 const GROUP_STYLE: Record<string, { icon: LucideIcon; color: string }> = {
   decide: { icon: CircleAlert, color: "var(--v-ask)" },
+  waiting: { icon: Hourglass, color: "var(--v-dup)" },
   pay: { icon: CircleCheck, color: "var(--v-pay)" },
+  resolved: { icon: CheckCheck, color: "var(--v-pay)" },
   none: { icon: Archive, color: "var(--v-dup)" },
 };
 
-export const GROUPS: { id: string; title: string; verdicts: Verdict[] }[] = [
-  { id: "decide", title: "Требует решения", verdicts: ["stop", "return", "ask"] },
-  { id: "pay", title: "К оплате", verdicts: ["pay"] },
-  { id: "none", title: "Без действий", verdicts: ["duplicate", "letter"] },
+// Группа зависит от вердикта и от решения бухгалтера: решённое уходит в «Решено», отправленный вопрос — в «Ждём ответа».
+// Снятое решение (вердикт изменился) не считается: документ возвращается в свою группу.
+const NO: DocStatus = { decision: null, at: null, valid: false, stale: null, waiting: false, resolved: false, inRegistry: false, amount: 0 };
+export const GROUPS: { id: string; title: string; verdicts: Verdict[]; match: (r: Result, s: DocStatus) => boolean }[] = [
+  { id: "decide", title: "Требует решения", verdicts: ["stop", "return", "ask"], match: (r, s) => ["stop", "return", "ask"].includes(r.verdict) && !s.valid },
+  { id: "waiting", title: "Ждём ответа", verdicts: [], match: (r, s) => s.waiting },
+  { id: "pay", title: "К оплате: подтвердить", verdicts: ["pay"], match: (r, s) => r.verdict === "pay" && !s.valid },
+  { id: "resolved", title: "Решено", verdicts: [], match: (r, s) => s.resolved },
+  { id: "none", title: "Без действий", verdicts: ["duplicate", "letter"], match: (r) => r.verdict === "duplicate" || r.verdict === "letter" },
 ];
 const ORDER: Verdict[] = ["stop", "return", "ask", "pay", "duplicate", "letter"];
 const RANK = Object.fromEntries(ORDER.map((v, i) => [v, i])) as Record<Verdict, number>;
@@ -97,7 +105,7 @@ export function Queue({
   results,
   selected,
   onSelect,
-  done,
+  statuses,
   filter,
   setFilter,
   collapsed,
@@ -106,7 +114,7 @@ export function Queue({
   results: Result[];
   selected: string | null;
   onSelect: (id: string) => void;
-  done: Set<string>;
+  statuses: Map<string, DocStatus>;
   filter: QueueFilter;
   setFilter: (f: QueueFilter) => void;
   collapsed: Set<string>;
@@ -119,7 +127,7 @@ export function Queue({
   const list = results.filter(
     (r) =>
       (!filter.verdicts.length || filter.verdicts.includes(r.verdict)) &&
-      (!filter.hideDone || !done.has(r.id)) &&
+      (!filter.hideDone || !statuses.get(r.id)?.resolved) &&
       (!filter.onlyNew || r.isNew) &&
       (!filter.to.length || r.addressees.some((a) => filter.to.includes(addresseeKey(a)))) &&
       (!filter.reasons.length || reasonsOf(r).some((x) => filter.reasons.includes(x))) &&
@@ -146,7 +154,7 @@ export function Queue({
     .map(([id, n]) => ({ id, label: id, count: n }));
   const reasonOptions = REASONS.map((x) => ({ ...x, count: results.filter((r) => reasonsOf(r).includes(x.id)).length }));
   const newCount = results.filter((r) => r.isNew).length;
-  const verdictGroup = GROUPS.find((g) => g.verdicts.length === filter.verdicts.length && g.verdicts.every((v) => filter.verdicts.includes(v)));
+  const verdictGroup = filter.verdicts.length ? GROUPS.find((g) => g.verdicts.length === filter.verdicts.length && g.verdicts.every((v) => filter.verdicts.includes(v))) : undefined;
   const anyFilter = filter.to.length || filter.reasons.length || filter.onlyNew || filter.verdicts.length || filter.q;
 
   return (
@@ -207,10 +215,12 @@ export function Queue({
 
       <nav aria-label="Очередь документов" className="min-h-0 flex-1 overflow-y-auto">
         {GROUPS.map((g) => {
-          const items = list.filter((r) => g.verdicts.includes(r.verdict)).sort(cmp);
+          const st = (r: Result) => statuses.get(r.id) ?? NO;
+          const items = list.filter((r) => g.match(r, st(r))).sort(cmp);
           if (!items.length) return null;
           const isCollapsed = collapsed.has(g.id) && !anyFilter; // при поиске и фильтрах группы раскрыты
-          const sum = items.reduce((s, r) => s + (r.verdict === "pay" ? r.payNow : r.ex.kind === "letter" ? 0 : r.invoiced ?? 0), 0);
+          // «Решено» — сумма в реестре; «К оплате» — по сверке; остальное — по счёту
+          const sum = items.reduce((s, r) => s + (g.id === "resolved" ? st(r).amount : r.verdict === "pay" ? r.payNow : r.ex.kind === "letter" ? 0 : r.invoiced ?? 0), 0);
           return (
             <section key={g.id}>
               <h2
@@ -262,12 +272,13 @@ export function Queue({
                             <span className={cn("num text-[13px] font-medium whitespace-nowrap", r.verdict === "duplicate" ? "text-muted-foreground line-through decoration-1" : "text-ink")}>
                               {amount !== null && amount !== undefined && r.ex.kind !== "letter" ? fmtRub(amount) : ""}
                             </span>
-                            {done.has(r.id) && (
-                              <span className="inline-flex items-center gap-0.5 text-[11px] text-pay">
-                                <Check className="size-3" strokeWidth={2.5} aria-hidden />
-                                решено
+                            {st(r).valid && st(r).decision && (
+                              <span className={cn("inline-flex items-center gap-0.5 text-right text-[11px] leading-tight", st(r).inRegistry ? "text-pay" : "text-muted-foreground")}>
+                                {st(r).inRegistry && <Check className="size-3 shrink-0" strokeWidth={2.5} aria-hidden />}
+                                {DECISION_LABEL[st(r).decision!.kind].toLowerCase()}
                               </span>
                             )}
+                            {st(r).stale && <span className="text-right text-[11px] leading-tight text-ask">решение снято</span>}
                           </span>
                         </button>
                       </li>

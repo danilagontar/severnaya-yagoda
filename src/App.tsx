@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import rawData from "@/data/case.json";
 import { extractByRules } from "@/core/extract";
 import { reconcileAll, summarize } from "@/core/reconcile";
+import { computeState, makeEvent, validateDecision, type AppEvent, type Decision } from "@/core/events";
 import type { CaseData, Extracted, Letter, Verdict } from "@/core/types";
 import { extractWithLlm, getLlmStatus, type LlmMode } from "@/llm/provider";
 import { Queue, DEFAULT_FILTER, type QueueFilter } from "@/components/Queue";
@@ -36,10 +37,11 @@ const save = (k: string, v: unknown) => {
 };
 
 export default function App() {
-  const [extra, setExtra] = useState<Letter[]>(() => load("sy.extra", []));
+  // Журнал событий: письма, решения бухгалтера, передача реестра (src/core/events.ts).
+  // Раньше новые письма лежали в sy.extra — переносим их в журнал один раз.
+  const [events, setEvents] = useState<AppEvent[]>(() => load<AppEvent[] | null>("sy.events", null) ?? load<Letter[]>("sy.extra", []).map((letter) => makeEvent({ type: "letter", letter })));
   // разбор ИИ сохраняется: иначе после перезагрузки письма, где поля нашёл только ИИ, разберутся одними правилами и сменят вердикт
   const [llmCache, setLlmCache] = useState<Record<string, Extracted>>(() => load("sy.llm", {}));
-  const [done, setDone] = useState<Set<string>>(() => new Set(load<string[]>("sy.done", [])));
   const [selected, setSelected] = useState<string | null>(null);
   const [view, setView] = useState<View>("queue");
   // сортировка, направления и «скрыть решённые» сохраняются между перезагрузками
@@ -62,17 +64,15 @@ export default function App() {
     document.documentElement.classList.toggle("dark", dark);
     save("sy.dark", dark);
   }, [dark]);
-  useEffect(() => save("sy.extra", extra), [extra]);
+  useEffect(() => save("sy.events", events), [events]);
   useEffect(() => save("sy.llm", llmCache), [llmCache]);
-  useEffect(() => save("sy.done", [...done]), [done]);
   useEffect(() => save("sy.collapsed", [...collapsed]), [collapsed]);
   useEffect(() => save("sy.view", { sort: filter.sort, dirs: filter.dirs, hideDone: filter.hideDone }), [filter.sort, filter.dirs, filter.hideDone]);
 
-  const newIds = useMemo(() => new Set(extra.map((l) => l.id)), [extra]);
-  const results = useMemo(
-    () => reconcileAll(data, [...data.letters, ...extra], (t, s) => llmCache[s + "\n" + t] ?? extractByRules(t, s), newIds),
-    [extra, llmCache, newIds],
-  );
+  const extractor = useMemo(() => (t: string, s: string) => llmCache[s + "\n" + t] ?? extractByRules(t, s), [llmCache]);
+  const state = useMemo(() => computeState(data, events, extractor), [events, extractor]);
+  const { results, statuses, registry } = state;
+  const extra = useMemo(() => events.flatMap((e) => (e.type === "letter" ? [e.letter] : [])), [events]);
   const base = useMemo(() => reconcileAll(data), []);
   const summary = useMemo(() => summarize(results), [results]);
   const baseSummary = useMemo(() => summarize(base), [base]);
@@ -134,10 +134,11 @@ export default function App() {
       setLlmCache(cache);
       setTick((t) => t + 1);
     }
+    const next = [...events, makeEvent({ type: "letter", letter })];
     const before = new Map(results.map((r) => [r.id, r.verdict]));
-    const after = reconcileAll(data, [...data.letters, ...extra, letter], (t, s) => cache[s + "\n" + t] ?? extractByRules(t, s), new Set([...newIds, id]));
+    const after = computeState(data, next, (t, s) => cache[s + "\n" + t] ?? extractByRules(t, s)).results;
     setChanges(after.filter((r) => before.has(r.id) && before.get(r.id) !== r.verdict).map((r) => ({ id: r.id, from: before.get(r.id)!, to: r.verdict })));
-    setExtra([...extra, letter]);
+    setEvents(next);
     setSelected(id);
     setView("queue");
   };
@@ -148,15 +149,32 @@ export default function App() {
     // номера Н-01… выдаются заново: черновики убранных писем не должны достаться новым
     const removedIds = new Set(extra.map((l) => l.id));
     forgetDrafts((id) => removedIds.has(id));
-    setExtra([]);
+    // убираем только письма; решения по ним без документа ни на что не влияют
+    setEvents((ev) => ev.filter((e) => e.type !== "letter"));
     setChanges(null);
     setSelected(null);
   };
 
-  const needDecision = summary.byVerdict.stop + summary.byVerdict.return + summary.byVerdict.ask;
+  // «Требует решения» — стоп / вернуть / вопрос без действующего решения бухгалтера
+  const open = results.filter((r) => (r.verdict === "stop" || r.verdict === "return" || r.verdict === "ask") && !statuses.get(r.id)?.valid);
+  const needDecision = open.length;
+  const openBy = (v: string) => open.filter((r) => r.verdict === v).length;
   // «Разобрано» — документы, по которым бухгалтер принимает решение (дубли и письма-контекст решения не требуют)
   const decidable = results.filter((r) => r.verdict !== "duplicate" && r.verdict !== "letter");
-  const decided = decidable.filter((r) => done.has(r.id)).length;
+  const decided = decidable.filter((r) => statuses.get(r.id)?.resolved).length;
+  const waitingCount = decidable.filter((r) => statuses.get(r.id)?.waiting).length;
+
+  const push = (e: AppEvent) => setEvents((ev) => [...ev, e]);
+  /** Решение бухгалтера (null — вернуть в работу). Возвращает текст ошибки, если решение не подходит. */
+  const decide = (r: (typeof results)[number], d: Decision | null): string | null => {
+    if (!d) {
+      push(makeEvent({ type: "reopen", doc: r.id }));
+      return null;
+    }
+    const err = validateDecision(r, d);
+    if (!err) push(makeEvent({ type: "decision", doc: r.id, decision: d }));
+    return err;
+  };
 
   const queuePanel = (
     <>
@@ -167,7 +185,7 @@ export default function App() {
           select(id);
           setMobileQueue(false);
         }}
-        done={done}
+        statuses={statuses}
         filter={filter}
         setFilter={setFilter}
         collapsed={collapsed}
@@ -244,7 +262,15 @@ export default function App() {
       {/* Итоги очереди */}
       {/* Сетка: у плиток одного ряда общая строка подписей и общая строка сумм — всё на одном уровне, даже если подпись переносится */}
       <section aria-label="Итоги очереди" className="grid shrink-0 grid-cols-[repeat(auto-fit,minmax(150px,1fr))] border-b border-line bg-surface">
-        <Stat label="К оплате сейчас" hint={`${summary.payNowCount} ${plural(summary.payNowCount, INVOICES)}`} value={fmtRub(summary.payNow)} tone="pay" link={{ label: "реестр", onClick: () => setView("registry") }} />
+        <Stat
+          label="В реестре"
+          hint={`${registry.items.length} ${plural(registry.items.length, INVOICES)}`}
+          value={fmtRub(registry.total)}
+          tone="pay"
+          link={{ label: "реестр", onClick: () => setView("registry") }}
+          extra={`из ${fmtRub(registry.proposed.total)}`}
+          detail={`Сверка предлагает к оплате ${num(registry.proposed.total)} ₽ (${registry.proposed.count} ${plural(registry.proposed.count, INVOICES)}). В реестр попадают только счета, подтверждённые бухгалтером.`}
+        />
         <Stat
           label="Не платить"
           hint="дубли, подмена, цены, итог"
@@ -263,7 +289,7 @@ export default function App() {
         />
         <Stat
           label="Требует решения"
-          hint={`стоп ${summary.byVerdict.stop} | вернуть ${summary.byVerdict.return} | вопрос ${summary.byVerdict.ask}`}
+          hint={`стоп ${openBy("stop")} | вернуть ${openBy("return")} | вопрос ${openBy("ask")}`}
           value={String(needDecision)}
           tone="ask"
           link={{
@@ -276,7 +302,7 @@ export default function App() {
             },
           }}
         />
-        <Stat label="Разобрано" hint={`в ящике ${summary.total}`} value={`${decided} из ${decidable.length}`} />
+        <Stat label="Разобрано" hint={waitingCount ? `ждём ответа ${waitingCount}` : `в ящике ${summary.total}`} value={`${decided} из ${decidable.length}`} />
       </section>
 
       {changes && (
@@ -334,13 +360,8 @@ export default function App() {
               r={current}
               all={results}
               onSelect={select}
-              done={done.has(current.id)}
-              onDone={(id, v) => {
-                const n = new Set(done);
-                if (v) n.add(id);
-                else n.delete(id);
-                setDone(n);
-              }}
+              status={statuses.get(current.id)!}
+              onDecide={(d) => decide(current, d)}
               llm={llm.mode}
               onCrossCheck={async (r) => {
                 const { ex } = await extractWithLlm(r.text, r.sender, "ИИ");
@@ -349,7 +370,15 @@ export default function App() {
               }}
             />
           )}
-          {view === "registry" && <Registry results={results} summary={summary} done={done} onSelect={select} snapshot={data.meta.snapshot} />}
+          {view === "registry" && <Registry
+              results={results}
+              statuses={statuses}
+              registry={registry}
+              onSelect={select}
+              snapshot={data.meta.snapshot}
+              onSubmit={() => push(makeEvent({ type: "registry-submitted", ids: registry.items.map((i) => i.r.id), total: registry.total }))}
+              onApprove={() => push(makeEvent({ type: "registry-approved" }))}
+            />}
           {view === "etalon" && <EtalonView base={base} summary={baseSummary} onSelect={select} />}
           {view === "new" && <NewLetter onSubmit={addLetter} onClose={() => setView("queue")} llm={llm.mode} nextId={nextId} />}
         </main>
