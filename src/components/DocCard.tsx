@@ -184,6 +184,14 @@ export function DocCard({
     setCopied(false);
     writeJson(OPEN_KEY, { ...readJson<Record<string, number>>(OPEN_KEY, {}), [r.id]: i });
   };
+  // повторное нажатие на того же адресата сворачивает письмо
+  const closeDraft = () => {
+    setDraftIdx(null);
+    setCopied(false);
+    const open = readJson<Record<string, number>>(OPEN_KEY, {});
+    delete open[r.id];
+    writeJson(OPEN_KEY, open);
+  };
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(`Тема: ${draft?.subject}\n\n${body}`);
@@ -203,8 +211,7 @@ export function DocCard({
     return x ? [x] : [];
   });
 
-  // Черновик письма: для «вопроса», «вернуть» и «стоп» стоит внутри «Решения бухгалтера»,
-  // чтобы бухгалтер видел, что отправить, до отметки «отправлено». Для дублей и писем: отдельным блоком.
+  // Черновик письма адресату: отдельный блок над «Решением бухгалтера»
   const draftBlock =
     r.addressees.length > 0 ? (
         <section aria-labelledby="to-h" className="rounded-[8px] border border-line bg-surface">
@@ -214,7 +221,7 @@ export function DocCard({
               Кому написать
             </h2>
             {r.addressees.map((a, i) => (
-              <Button key={i} variant={draftIdx === i ? "default" : "outline"} size="sm" onClick={() => openDraft(i)} title={a.reason}>
+              <Button key={i} variant={draftIdx === i ? "default" : "outline"} size="sm" aria-pressed={draftIdx === i} onClick={() => (draftIdx === i ? closeDraft() : openDraft(i))} title={draftIdx === i ? "Свернуть письмо" : a.reason}>
                 {a.name}
                 <span className={cn("text-[12px] font-normal", draftIdx === i ? "opacity-80" : "text-muted-foreground")}>{roleTitle(a)}</span>
               </Button>
@@ -225,9 +232,10 @@ export function DocCard({
               <p className="text-[13px]">
                 <span className="text-muted-foreground">Тема: </span>
                 <span className="font-medium text-ink">{draft.subject}</span>
-                <span className="text-muted-foreground"><Sep />причина: {draft.to.reason}</span>
                 <span className="text-muted-foreground"><Sep />кому: </span>
                 {email ? <span className="num text-ink">{email}</span> : <span className="text-ask">адреса нет в данных кейса</span>}
+                {/* причина только для бухгалтера, в письмо не идёт */}
+                <span className="text-muted-foreground"><Sep />причина: {draft.to.reason}</span>
               </p>
               <Textarea value={body} onChange={(e) => setBody(e.target.value)} rows={Math.min(14, body.split("\n").length + 1)} className="num resize-y bg-surface text-[13.5px] leading-relaxed" aria-label="Текст письма" />
               <div className="flex flex-wrap items-center gap-2">
@@ -273,7 +281,6 @@ export function DocCard({
           )}
         </section>
     ) : null;
-  const letterInPanel = r.verdict === "ask" || r.verdict === "return" || r.verdict === "stop" || r.verdict === "pay";
 
   return (
     <article className="@container mx-auto flex max-w-[1080px] flex-col gap-5 px-4 pt-5 pb-10 sm:px-6" aria-labelledby="doc-title">
@@ -335,9 +342,6 @@ export function DocCard({
           </dl>
         )}
       </section>
-
-      {/* Решение бухгалтера: дубли и письма-контекст решения не требуют */}
-      <DecisionPanel key={r.id + r.verdict} r={r} status={status} onDecide={onDecide} letter={letterInPanel ? draftBlock : null} />
 
       {/* Сверка: Заказ / Согласование / Приёмка / Счёт */}
       {!isLetter && r.compare.length > 0 && (
@@ -505,10 +509,15 @@ export function DocCard({
         </section>
       </div>
 
-      {!letterInPanel && draftBlock}
       <span className="sr-only">{v.long}</span>
 
-      {/* История заказа: в самом низу карточки */}
+      {/* Кому написать: отдельно от кнопок решения */}
+      {draftBlock}
+
+      {/* Решение бухгалтера: дубли и письма-контекст решения не требуют */}
+      <DecisionPanel key={r.id + r.verdict} r={r} status={status} onDecide={onDecide} />
+
+      {/* История заказа: в самом низу, под решением */}
       <OrderTimeline orderId={r.orderId} items={timeline} currentId={r.id} onSelect={onSelect} others={others} />
     </article>
   );
