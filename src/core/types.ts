@@ -136,6 +136,7 @@ export interface Finding {
   rule: string; // П-1 … П-9
   level: Level;
   text: string;
+  short?: string; // тема в несколько слов для заголовка, когда тем у счёта несколько
   source?: string; // ЗП-04, СГ-05, «приёмка», В-25…
 }
 

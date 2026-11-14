@@ -441,7 +441,13 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
     if (conv.price > effPrice + EPS) {
       r.findings.push(...priceNotes);
       const over = round2((conv.price - effPrice) * conv.qty);
-      r.findings.push({ rule: "П-6", level: "ask", text: `Цена в счёте ${num(round2(conv.price))} ₽/${order.unit}, действующая: ${num(effPrice)} ₽ (${priceSource}). Разница ${rub(over)}.`, source: usedApproval?.id ?? order.id });
+      r.findings.push({
+        rule: "П-6",
+        level: "ask",
+        text: `Цена в счёте ${num(round2(conv.price))} ₽/${order.unit}, действующая: ${num(effPrice)} ₽ (${priceSource}). Разница ${rub(over)}.`,
+        short: `цена выше действующей на ${rub(over)}`,
+        source: usedApproval?.id ?? order.id,
+      });
       r.prevented.push({ category: "price", amount: over });
       addAddr(r, buyerOf(order, "цена выше действующей (П-6)"));
     } else if (usedApproval && Math.abs(usedApproval.newPrice! - order.price) > EPS) {
@@ -463,24 +469,37 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
         rule: "П-6",
         level: "ask",
         text: `Склад принял ${num(order.accepted)} ${order.unit} при заказе ${num(approvedQty)}, согласования на +${num(order.accepted - approvedQty)} нет. К оплате ${num(billable)} ${order.unit}.`,
+        short: `принято ${num(order.accepted)} при заказе ${num(approvedQty)}, излишек не согласован`,
         source: order.id,
       });
       addAddr(r, buyerOf(order, "согласовать или вернуть излишек"));
       addAddr(r, { role: "warehouse", name: WAREHOUSE, reason: "почему принято сверх заказа" });
     } else if (conv.qty > remaining + EPS) {
       if (order.accepted === 0) {
-        r.findings.push({ rule: "П-4", level: "ask", text: `По ${order.id} на складе ничего не принято (срез ${data.meta.snapshot}). Счёт на ${num(conv.qty)} ${order.unit}.`, source: order.id });
+        r.findings.push({
+          rule: "П-4",
+          level: "ask",
+          text: `По ${order.id} на складе ничего не принято (срез ${data.meta.snapshot}). Счёт на ${num(conv.qty)} ${order.unit}.`,
+          short: `ничего не принято, счёт на ${num(conv.qty)} ${order.unit}`,
+          source: order.id,
+        });
       } else {
         const parts = [`принято ${num(order.accepted)}`];
         if (before) parts.push(`уже выставлено ${num(before)}`);
-        r.findings.push({ rule: "П-4", level: "ask", text: `Счёт на ${num(conv.qty)} ${order.unit}, к оплате доступно ${num(remaining)} (${parts.join(", ")}).`, source: order.id });
+        r.findings.push({
+          rule: "П-4",
+          level: "ask",
+          text: `Счёт на ${num(conv.qty)} ${order.unit}, к оплате доступно ${num(remaining)} (${parts.join(", ")}).`,
+          short: before ? `к оплате доступно ${num(remaining)} из ${num(conv.qty)}` : `принято ${num(order.accepted)} из ${num(conv.qty)}`,
+          source: order.id,
+        });
       }
       if (ex.promise) r.findings.push({ rule: "П-4", level: "info", text: `Обещание «${ex.promise}» приёмкой не считается.` });
       // П-5: только если часть счёта в пределах заказа, но ещё не принята (это и есть предоплата).
       // Если всё принятое уже выставлено и счёт выходит за заказ: это лишний счёт (П-3, сводка по заказу ниже).
       const prepaid = Math.min(before + conv.qty, approvedQty) > Math.max(before, order.accepted) + EPS;
       if (prepaid) {
-        r.findings.push({ rule: "П-5", level: "ask", text: "Предоплата возможна только по договору. Условий в выгрузке нет, запросить у закупщика." });
+        r.findings.push({ rule: "П-5", level: "ask", text: "Предоплата возможна только по договору. Условий в выгрузке нет, запросить у закупщика.", short: "предоплата не подтверждена договором" });
         addAddr(r, buyerOf(order, "условия договора о предоплате (П-5)"));
       } else {
         addAddr(r, buyerOf(order, "счёт сверх заказа (П-3)"));
@@ -526,7 +545,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
       const overIds = list.filter((x) => x.deferred > EPS).map((x) => x.id);
       const text = `По ${o.id} на ${num(approvedQty)} ${o.unit} выставлено ${num(sum)}: счета ${list.map((x) => x.id).join(", ")}.`;
       for (const r of list) {
-        if (over.includes(r)) r.findings.push({ rule: "П-3", level: "ask", text, source: o.id });
+        if (over.includes(r)) r.findings.push({ rule: "П-3", level: "ask", text, short: `по ${o.id} выставлено ${num(sum)} из ${num(approvedQty)}`, source: o.id });
         else r.findings.push({ rule: "П-3", level: "info", text: `${text} Этот счёт в пределах заказа и приёмки${overIds.length ? `, лишнее в ${overIds.join(", ")}` : ""}.`, source: o.id });
       }
     }
@@ -616,7 +635,21 @@ function finalizeVerdict(r: Result, arithmeticError: boolean) {
   r.payNow = v === "pay" ? r.due ?? 0 : 0;
 }
 
+/** Заголовок счёта: если причин на разные темы несколько, перечисляет все темы, а подробности остаются в «Почему так». */
 function defaultHeadline(r: Result): string {
+  if (r.verdict !== "pay") {
+    // одна тема на правило: две причины П-6 про одну цену дают одну тему
+    const byRule = new Map<string, Finding>();
+    for (const f of r.findings) if (f.level !== "info" && f.level !== "ok" && !byRule.has(f.rule)) byRule.set(f.rule, f);
+    const topics = [...byRule.values()];
+    if (topics.length > 1) {
+      // сначала темы уровня вердикта (главная причина), затем остальные, порядок внутри сохраняется
+      topics.sort((a, b) => Number(b.level === r.verdict) - Number(a.level === r.verdict));
+      const parts = topics.map((f) => f.short ?? f.text.replace(/\.$/, ""));
+      const s = parts.join("; ");
+      return s[0].toUpperCase() + s.slice(1) + ".";
+    }
+  }
   const main = r.findings.find((f) => f.level === r.verdict || (r.verdict === "return" && f.level === "return") || (r.verdict === "ask" && f.level === "ask"));
   if (r.verdict === "pay") {
     const info = r.findings.find((f) => f.level === "info");
