@@ -4,7 +4,7 @@ import { INVOICES, cn, plural } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import rawData from "@/data/case.json";
 import { extractByRules } from "@/core/extract";
-import { reconcileAll, summarize, type Extractor } from "@/core/reconcile";
+import { summarize, type Extractor } from "@/core/reconcile";
 import { computeState, describeEvent, makeEvent, metrics, metricsDelta, orderTimeline, validateDecision, type AppEvent, type Decision, type Metrics } from "@/core/events";
 import { Scenarios } from "@/components/Scenarios";
 import type { Scenario } from "@/data/scenarios";
@@ -89,9 +89,7 @@ export default function App() {
   const state = useMemo(() => computeState(data, events, extractor), [events, extractor]);
   const { results, statuses, registry } = state;
   const extra = useMemo(() => events.flatMap((e) => (e.type === "letter" ? [e.letter] : [])), [events]);
-  const base = useMemo(() => reconcileAll(data), []);
   const summary = useMemo(() => summarize(results), [results]);
-  const baseSummary = useMemo(() => summarize(base), [base]);
   const current = results.find((r) => r.id === selected) ?? null;
   const nextId = `Н-${String(extra.length + 1).padStart(2, "0")}`;
 
@@ -463,7 +461,7 @@ export default function App() {
               onSelect={select}
             />
           )}
-          {view === "etalon" && <EtalonView base={base} summary={baseSummary} onSelect={select} />}
+          {view === "etalon" && <EtalonView data={data} onSelect={select} />}
         </main>
       </div>
     </div>
