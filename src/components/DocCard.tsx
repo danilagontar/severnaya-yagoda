@@ -194,6 +194,85 @@ export function DocCard({
     }
   };
 
+  // Связанные документы, которых нет в истории заказа (другой заказ или заказ не найден): показываются под историей
+  const inTimeline = new Set(timeline.flatMap((t) => (t.docId ? [t.docId] : [])));
+  const others = r.related.filter((id) => !inTimeline.has(id)).flatMap((id) => {
+    const x = all.find((y) => y.id === id);
+    return x ? [x] : [];
+  });
+
+  // Черновик письма: для «вопроса», «вернуть» и «стоп» стоит внутри «Решения бухгалтера»,
+  // чтобы бухгалтер видел, что отправить, до отметки «отправлено». Для дублей и писем: отдельным блоком.
+  const draftBlock =
+    r.addressees.length > 0 ? (
+        <section aria-labelledby="to-h" className="rounded-[8px] border border-line bg-surface">
+          <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
+            <h2 id="to-h" className="mr-2 flex items-center gap-1.5 text-[15px] font-semibold text-ink">
+              <Mail className="size-4 text-muted-foreground" aria-hidden />
+              Кому написать
+            </h2>
+            {r.addressees.map((a, i) => (
+              <Button key={i} variant={draftIdx === i ? "default" : "outline"} size="sm" onClick={() => openDraft(i)} title={a.reason}>
+                {a.name}
+                <span className={cn("text-[12px] font-normal", draftIdx === i ? "opacity-80" : "text-muted-foreground")}>{roleTitle(a)}</span>
+              </Button>
+            ))}
+          </div>
+          {draft ? (
+            <div className="flex flex-col gap-2 px-4 py-3">
+              <p className="text-[13px]">
+                <span className="text-muted-foreground">Тема: </span>
+                <span className="font-medium text-ink">{draft.subject}</span>
+                <span className="text-muted-foreground"><Sep />причина: {draft.to.reason}</span>
+                <span className="text-muted-foreground"><Sep />кому: </span>
+                {email ? <span className="num text-ink">{email}</span> : <span className="text-ask">адреса нет в данных кейса</span>}
+              </p>
+              <Textarea value={body} onChange={(e) => setBody(e.target.value)} rows={Math.min(14, body.split("\n").length + 1)} className="num resize-y bg-surface text-[13.5px] leading-relaxed" aria-label="Текст письма" />
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" onClick={copy}>
+                  {copied ? <Check /> : <Copy />}
+                  {copied ? "Скопировано" : "Скопировать письмо"}
+                </Button>
+                <Button size="sm" variant="outline" asChild>
+                  <a href={mailto} title={email ? `Откроется почтовая программа: ${email}` : "Адреса в данных кейса нет: почта откроется без получателя"}>
+                    <ExternalLink />
+                    Открыть в почте
+                  </a>
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={llm !== "gigachat" || busy}
+                  title={llm !== "gigachat" ? "ИИ не подключён: задайте ключ в .env.local (docs/llm.md)" : undefined}
+                  onClick={async () => {
+                    setBusy(true);
+                    const res = await polishDraft({ ...draft, body }, r.verdict);
+                    setBodyState(res.body);
+                    setNoteState(res.note);
+                    persist(draftIdx, res.body, res.note);
+                    setBusy(false);
+                  }}
+                >
+                  <Sparkles />
+                  {busy ? "ИИ пишет…" : "Дописать текст с ИИ"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => openDraft(draftIdx!, true)}>
+                  <RotateCcw />
+                  Шаблон
+                </Button>
+                <span className="text-[12.5px] text-muted-foreground">{note ?? "Числа в письме взяты из сверки и не меняются при переписывании."}</span>
+              </div>
+            </div>
+          ) : (
+            <p className="flex items-center gap-1.5 px-4 py-3 text-[13px] text-muted-foreground">
+              Выберите адресата, и черновик соберётся из причин выше
+              <ArrowRight className="size-3.5" aria-hidden />
+            </p>
+          )}
+        </section>
+    ) : null;
+  const letterInPanel = r.verdict === "ask" || r.verdict === "return" || r.verdict === "stop" || r.verdict === "pay";
+
   return (
     <article className="@container mx-auto flex max-w-[1080px] flex-col gap-5 px-4 pt-5 pb-10 sm:px-6" aria-labelledby="doc-title">
       {/* Заголовок документа */}
@@ -246,7 +325,7 @@ export function DocCard({
       </section>
 
       {/* Решение бухгалтера: дубли и письма-контекст решения не требуют */}
-      <DecisionPanel key={r.id + r.verdict} r={r} status={status} onDecide={onDecide} />
+      <DecisionPanel key={r.id + r.verdict} r={r} status={status} onDecide={onDecide} letter={letterInPanel ? draftBlock : null} />
 
       {/* Сверка: Заказ / Согласование / Приёмка / Счёт */}
       {!isLetter && r.compare.length > 0 && (
@@ -411,103 +490,14 @@ export function DocCard({
             )}
           </div>
           <CrossCheckPanel r={r} llm={llm} onRun={onCrossCheck} />
-          {r.related.length > 0 && (
-            <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[13px]">
-              <span className="mr-1 inline-flex items-center gap-1 text-muted-foreground">
-                <Link2 className="size-3.5" aria-hidden />
-                Связано:
-              </span>
-              {r.related.map((id) => {
-                const x = all.find((y) => y.id === id);
-                return (
-                  <button
-                    key={id}
-                    onClick={() => onSelect(id)}
-                    className="inline-flex items-center gap-1.5 rounded-[5px] border border-line bg-surface px-2 py-0.5 hover:border-line-strong"
-                    title={x?.headline}
-                  >
-                    <span className="num font-medium">{id}</span>
-                    {x && <span className={cn("text-[12px]", verdictTextColor(x.verdict))}>{VERDICT[x.verdict].label.toLowerCase()}</span>}
-                  </button>
-                );
-              })}
-            </div>
-          )}
         </section>
       </div>
 
-      {/* Адресаты и черновик */}
-      {r.addressees.length > 0 && (
-        <section aria-labelledby="to-h" className="rounded-[8px] border border-line bg-surface">
-          <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
-            <h2 id="to-h" className="mr-2 flex items-center gap-1.5 text-[15px] font-semibold text-ink">
-              <Mail className="size-4 text-muted-foreground" aria-hidden />
-              Кому написать
-            </h2>
-            {r.addressees.map((a, i) => (
-              <Button key={i} variant={draftIdx === i ? "default" : "outline"} size="sm" onClick={() => openDraft(i)} title={a.reason}>
-                {a.name}
-                <span className={cn("text-[12px] font-normal", draftIdx === i ? "opacity-80" : "text-muted-foreground")}>{roleTitle(a)}</span>
-              </Button>
-            ))}
-          </div>
-          {draft ? (
-            <div className="flex flex-col gap-2 px-4 py-3">
-              <p className="text-[13px]">
-                <span className="text-muted-foreground">Тема: </span>
-                <span className="font-medium text-ink">{draft.subject}</span>
-                <span className="text-muted-foreground"><Sep />причина: {draft.to.reason}</span>
-                <span className="text-muted-foreground"><Sep />кому: </span>
-                {email ? <span className="num text-ink">{email}</span> : <span className="text-ask">адреса нет в данных кейса</span>}
-              </p>
-              <Textarea value={body} onChange={(e) => setBody(e.target.value)} rows={Math.min(14, body.split("\n").length + 1)} className="num resize-y bg-surface text-[13.5px] leading-relaxed" aria-label="Текст письма" />
-              <div className="flex flex-wrap items-center gap-2">
-                <Button size="sm" onClick={copy}>
-                  {copied ? <Check /> : <Copy />}
-                  {copied ? "Скопировано" : "Скопировать письмо"}
-                </Button>
-                <Button size="sm" variant="outline" asChild>
-                  <a href={mailto} title={email ? `Откроется почтовая программа: ${email}` : "Адреса в данных кейса нет: почта откроется без получателя"}>
-                    <ExternalLink />
-                    Открыть в почте
-                  </a>
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={llm !== "gigachat" || busy}
-                  title={llm !== "gigachat" ? "ИИ не подключён: задайте ключ в .env.local (docs/llm.md)" : undefined}
-                  onClick={async () => {
-                    setBusy(true);
-                    const res = await polishDraft({ ...draft, body }, r.verdict);
-                    setBodyState(res.body);
-                    setNoteState(res.note);
-                    persist(draftIdx, res.body, res.note);
-                    setBusy(false);
-                  }}
-                >
-                  <Sparkles />
-                  {busy ? "ИИ пишет…" : "Дописать текст с ИИ"}
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => openDraft(draftIdx!, true)}>
-                  <RotateCcw />
-                  Шаблон
-                </Button>
-                <span className="text-[12.5px] text-muted-foreground">{note ?? "Числа в письме взяты из сверки и не меняются при переписывании."}</span>
-              </div>
-            </div>
-          ) : (
-            <p className="flex items-center gap-1.5 px-4 py-3 text-[13px] text-muted-foreground">
-              Выберите адресата, и черновик соберётся из причин выше
-              <ArrowRight className="size-3.5" aria-hidden />
-            </p>
-          )}
-        </section>
-      )}
+      {!letterInPanel && draftBlock}
       <span className="sr-only">{v.long}</span>
 
       {/* История заказа: в самом низу карточки */}
-      {r.orderId && <OrderTimeline orderId={r.orderId} items={timeline} currentId={r.id} onSelect={onSelect} />}
+      <OrderTimeline orderId={r.orderId} items={timeline} currentId={r.id} onSelect={onSelect} others={others} />
     </article>
   );
 }

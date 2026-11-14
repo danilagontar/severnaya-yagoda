@@ -1,11 +1,57 @@
+import { Link2 } from "lucide-react";
 import type { TimelineItem } from "@/core/events";
+import type { Result } from "@/core/types";
 import { cn } from "@/lib/utils";
-import { VerdictTag } from "./verdict";
+import { VERDICT, VerdictTag } from "./verdict";
 import { Sep } from "@/components/sep";
 
-/** История заказа в карточке: заказ, согласования, приёмка, счета и письма: по дате; события журнала: в конце. */
-export function OrderTimeline({ orderId, items, currentId, onSelect }: { orderId: string; items: TimelineItem[]; currentId: string; onSelect: (id: string) => void }) {
-  if (!items.length) return null;
+/**
+ * История заказа в карточке: заказ, согласования, приёмка, счета и письма по дате; события журнала в конце.
+ * Под ней связанные документы, которых в истории нет (другой заказ, письмо без заказа). Если заказ не найден, остаются только они.
+ */
+export function OrderTimeline({
+  orderId,
+  items,
+  currentId,
+  onSelect,
+  others = [],
+}: {
+  orderId: string | null;
+  items: TimelineItem[];
+  currentId: string;
+  onSelect: (id: string) => void;
+  others?: Result[];
+}) {
+  const hasHistory = !!orderId && items.length > 0;
+  if (!hasHistory && !others.length) return null;
+  const related = others.length > 0 && (
+    <div className={cn("flex flex-wrap items-center gap-1.5 text-[13px]", hasHistory && "mt-2")}>
+      <span className="mr-1 inline-flex items-center gap-1 text-muted-foreground">
+        <Link2 className="size-3.5" aria-hidden />
+        {hasHistory ? "Связано с другими заказами:" : "Связано:"}
+      </span>
+      {others.map((x) => (
+        <button
+          key={x.id}
+          onClick={() => onSelect(x.id)}
+          className="inline-flex items-center gap-1.5 rounded-[5px] border border-line bg-surface px-2 py-0.5 hover:border-line-strong"
+          title={x.headline}
+        >
+          <span className="num font-medium">{x.id}</span>
+          <span className="text-[12px] text-muted-foreground">{x.ex.kind === "letter" ? "письмо" : VERDICT[x.verdict].label.toLowerCase()}</span>
+        </button>
+      ))}
+    </div>
+  );
+  if (!hasHistory)
+    return (
+      <section aria-labelledby="hist-h">
+        <h2 id="hist-h" className="mb-2 text-[15px] font-semibold text-ink">
+          Связанные документы
+        </h2>
+        {related}
+      </section>
+    );
   return (
     <section aria-labelledby="hist-h">
       <h2 id="hist-h" className="mb-2 text-[15px] font-semibold text-ink">
@@ -50,6 +96,7 @@ export function OrderTimeline({ orderId, items, currentId, onSelect }: { orderId
           );
         })}
       </ol>
+      {related}
     </section>
   );
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Check, CircleSlash, Clock, RotateCcw, Send, Undo2, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -17,7 +17,17 @@ const HINT: Partial<Record<Result["verdict"], string>> = {
 };
 
 /** Решение бухгалтера по документу: подтвердить, ждать ответа, оплатить по решению, вернуть, не платить. */
-export function DecisionPanel({ r, status, onDecide }: { r: Result; status: DocStatus; onDecide: (d: Decision | null) => string | null }) {
+export function DecisionPanel({
+  r,
+  status,
+  onDecide,
+  letter,
+}: {
+  r: Result;
+  status: DocStatus;
+  onDecide: (d: Decision | null) => string | null;
+  letter?: ReactNode; // черновик письма адресату: стоит над кнопками, сначала видно, что отправить
+}) {
   const [form, setForm] = useState<null | "override" | "reject">(null);
   const [amount, setAmount] = useState(String(r.due && r.due > 0 ? r.due : r.invoiced ?? ""));
   const [reason, setReason] = useState("");
@@ -59,6 +69,8 @@ export function DecisionPanel({ r, status, onDecide }: { r: Result; status: DocS
       </div>
 
       {status.stale && <p className="mt-2 rounded-[6px] bg-ask/10 px-3 py-2 text-[13px] text-ink">{status.stale}</p>}
+
+      {letter && <div className="mt-3">{letter}</div>}
 
       {d ? (
         <div className="mt-2 text-[14px] text-ink">
