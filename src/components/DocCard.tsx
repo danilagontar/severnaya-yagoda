@@ -194,6 +194,8 @@ export function DocCard({
     }
   };
 
+  const m = moneyLines(r, status);
+
   // Связанные документы, которых нет в истории заказа (другой заказ или заказ не найден): показываются под историей
   const inTimeline = new Set(timeline.flatMap((t) => (t.docId ? [t.docId] : [])));
   const others = r.related.filter((id) => !inTimeline.has(id)).flatMap((id) => {
@@ -309,17 +311,27 @@ export function DocCard({
           <p className="mt-2.5 text-[15px] leading-snug text-ink text-pretty">{r.headline}</p>
         </div>
         {!isLetter && (
-          <dl className="grid grid-cols-[auto_auto] content-start gap-x-6 gap-y-1 text-right @[700px]:min-w-[240px]">
+          <dl className="grid grid-cols-[auto_auto] content-start gap-x-6 gap-y-1 text-right @[700px]:min-w-[260px]">
             <dt className="text-left text-[13px] text-muted-foreground">По счёту</dt>
             <dd className="num text-[15px] text-ink">{fmtRub(r.invoiced)}</dd>
-            <dt className="text-left text-[13px] text-muted-foreground">По сверке</dt>
-            <dd className={cn("num text-[15px]", r.due !== null && r.invoiced !== null && r.due !== r.invoiced ? "font-semibold text-ink" : "text-ink")}>
-              {r.verdict === "duplicate" ? "не платить" : fmtRub(r.due)}
-            </dd>
+            {m.showDue && (
+              <>
+                <dt className="text-left text-[13px] text-muted-foreground">По сверке</dt>
+                <dd className={cn("num text-[15px]", m.diff ? "font-semibold text-ink" : "text-ink")}>{fmtRub(r.due)}</dd>
+              </>
+            )}
+            {m.diff && (
+              <>
+                <dt className="text-left text-[13px] text-muted-foreground">{m.diff.label}</dt>
+                <dd className="num text-[15px] text-ink">{fmtRub(m.diff.amount)}</dd>
+              </>
+            )}
+            {/* нижняя строка: что будет со счётом дальше, а не «0 ₽» */}
             <div className="col-span-2 mt-1 flex items-baseline justify-between gap-6 border-t border-line pt-1.5">
-              <dt className="text-[13px] font-medium text-ink">В реестр сейчас</dt>
-              <dd className={cn("num text-[18px] font-semibold", r.payNow > 0 ? "text-pay" : "text-ink")}>{fmtRub(r.payNow)}</dd>
+              <dt className={cn("text-left text-[13px] font-medium", m.state.amount === undefined && m.state.tone ? m.state.tone : "text-ink")}>{m.state.label}</dt>
+              {m.state.amount !== undefined && <dd className={cn("num text-[18px] font-semibold", m.state.tone)}>{fmtRub(m.state.amount)}</dd>}
             </div>
+            {m.state.hint && <p className="col-span-2 text-right text-[12px] text-muted-foreground">{m.state.hint}</p>}
           </dl>
         )}
       </section>
@@ -500,6 +512,43 @@ export function DocCard({
       <OrderTimeline orderId={r.orderId} items={timeline} currentId={r.id} onSelect={onSelect} others={others} />
     </article>
   );
+}
+
+/**
+ * Суммы в блоке вердикта: «по счёту», «по сверке», разница с причиной и что будет дальше.
+ * Слова те же, что на плитках и в реестре: «отложено», «к оплате», «в реестре».
+ */
+function moneyLines(r: Result, s: DocStatus) {
+  const rules = r.findings.filter((f) => f.level !== "info").map((f) => f.rule);
+  const gap = r.invoiced !== null && r.due !== null ? Math.round((r.invoiced - r.due) * 100) / 100 : 0;
+  let diff: { label: string; amount: number } | null = null;
+  if (gap > 0 && r.verdict !== "stop" && r.verdict !== "duplicate") {
+    const cat = r.prevented[0]?.category;
+    const label =
+      r.deferred > 0
+        ? rules.includes("П-4") || rules.includes("П-5")
+          ? "Отложено до приёмки"
+          : "Отложено до ответа"
+        : cat === "price"
+          ? "Цена без согласования"
+          : cat === "arithmetic"
+            ? "Ошибка в итоге"
+            : "Разница";
+    diff = { label, amount: gap };
+  }
+  const who = r.addressees[0]?.name;
+  type State = { label: string; amount?: number; tone?: string; hint?: string };
+  let state: State;
+  if (s.inRegistry) state = { label: s.decision?.kind === "pay-override" ? "В реестре по решению" : "В реестре", amount: s.amount, tone: "text-pay" };
+  else if (r.verdict === "pay") state = { label: "К оплате", amount: r.payNow, tone: "text-ink", hint: "В реестр попадёт после подтверждения" };
+  else if (r.verdict === "ask" && rules.includes("П-2")) state = { label: "Задержан до допсоглашения о реквизитах" };
+  else if (r.verdict === "ask") state = { label: who ? `Платёж после ответа: ${who}` : "Платёж после ответа" };
+  else if (r.verdict === "return") state = { label: "Ждём исправленный счёт" };
+  else if (r.verdict === "stop") state = { label: "Платить нельзя", tone: "text-stop" };
+  else if (r.verdict === "duplicate") state = { label: r.replacedBy ? `Не платить: заменён ${r.replacedBy}` : r.duplicateOf ? `Не платить: копия ${r.duplicateOf}` : "Не платить" };
+  else state = { label: "" };
+  if (s.valid && s.decision?.kind === "reject") state = { label: "Не платить по решению бухгалтера" };
+  return { showDue: r.verdict !== "stop" && r.verdict !== "duplicate", diff, state };
 }
 
 const CROSS: Record<CrossField["status"], { label: string; cls: string }> = {
