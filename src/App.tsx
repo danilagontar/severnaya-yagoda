@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, ListFilter, Moon, Plus, Sun, X } from "lucide-react";
+import { ArrowRight, ListFilter, Moon, Sun, X } from "lucide-react";
 import { INVOICES, cn, plural } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import rawData from "@/data/case.json";
@@ -65,8 +65,6 @@ export default function App() {
   const [delta, setDelta] = useState<Partial<Metrics> | null>(null);
   const deltaTimer = useRef<number | undefined>(undefined);
   const [flash, setFlash] = useState(0);
-  // «Новое письмо» в шапке: переход во вкладку «Сценарии» к форме письма
-  const [letterFocus, setLetterFocus] = useState(false);
   // направление подсветки плиток: живёт до следующего события, чтобы цвет догас, даже когда цифры уже скрыты
   const [flashDelta, setFlashDelta] = useState<Partial<Metrics> | null>(null);
   const [tick, setTick] = useState(0);
@@ -254,8 +252,8 @@ export default function App() {
   const NAV: { id: View; label: string; short: string }[] = [
     { id: "queue", label: "Очередь", short: "Очередь" },
     { id: "registry", label: "Реестр", short: "Реестр" },
-    { id: "scenarios", label: "Сценарии", short: "Сценарии" },
-    { id: "etalon", label: "Проверка на эталоне", short: "Эталон" },
+    { id: "scenarios", label: "Проверить пилот", short: "Проверить" },
+    { id: "etalon", label: "Сверить с эталоном", short: "Эталон" },
   ];
 
   return (
@@ -298,16 +296,6 @@ export default function App() {
           >
             {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </button>
-          <Button
-            size="sm"
-            onClick={() => {
-              setView("scenarios");
-              setLetterFocus(true);
-            }}
-          >
-            <Plus />
-            Новое письмо
-          </Button>
         </div>
       </header>
 
@@ -447,7 +435,7 @@ export default function App() {
             />}
           {view === "scenarios" && (
             <Scenarios
-              form={<NewLetter onSubmit={addLetter} llm={llm.mode} nextId={nextId} focus={letterFocus} onFocused={() => setLetterFocus(false)} />}
+              form={<NewLetter onSubmit={addLetter} llm={llm.mode} nextId={nextId} />}
               events={events}
               preview={(body) => {
                 const after = computeState(data, [...events, makeEvent(body)], extractor);

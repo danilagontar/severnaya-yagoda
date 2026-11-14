@@ -9,7 +9,7 @@ import { VerdictTag, fmtRub } from "./verdict";
 import { Sep } from "@/components/sep";
 
 /**
- * Проверка на эталоне. Колонка «Эталон»: ручная разметка команды, она видна сразу.
+ * Сверка с эталоном. Колонка «Эталон»: ручная разметка команды, она видна сразу.
  * Колонка «Пилот» появляется только по кнопке: в момент нажатия ядро сверки (то же, что разбирает
  * новые письма) прогоняет 25 писем кейса, время замеряется. Без искусственных задержек.
  */
@@ -47,9 +47,9 @@ export function EtalonView({ data, onSelect }: { data: CaseData; onSelect: (id: 
   return (
     <div className="@container mx-auto flex max-w-[1080px] flex-col gap-6 px-4 pt-6 pb-12 sm:px-6">
       <header>
-        <h1 className="text-[22px] font-semibold tracking-[-0.01em] text-ink">Проверка на эталоне</h1>
+        <h1 className="text-[22px] font-semibold tracking-[-0.01em] text-ink">Сверить с эталоном</h1>
         <p className="mt-1 max-w-[72ch] text-[13.5px] text-muted-foreground">
-          Здесь можно проверить, что пилот решает кейс правильно. В колонке «Эталон» ручной разбор всех 25 документов по правилам кейса. Нажмите «Проверить пилот на эталоне»:
+          Здесь можно проверить, что пилот решает кейс правильно. В колонке «Эталон» ручной разбор всех 25 документов по правилам кейса. Нажмите «Сверить пилот с эталоном»:
           пилот разберёт те же документы сам, а совпадения и расхождения будут отмечены в таблице.
         </p>
       </header>
@@ -77,7 +77,7 @@ export function EtalonView({ data, onSelect }: { data: CaseData; onSelect: (id: 
             <>
               <Button onClick={check}>
                 <Play />
-                Проверить пилот на эталоне
+                Сверить пилот с эталоном
               </Button>
               <p className="mt-2 max-w-[30ch] text-[12px] text-muted-foreground">Ядро сверки прогонит 25 писем кейса и сравнит с ручной разметкой.</p>
             </>

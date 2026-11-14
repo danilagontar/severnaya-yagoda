@@ -1,4 +1,4 @@
-// Ручная эталонная разметка (data/case04_etalon.md) в виде данных: для тестов и экрана «Проверка на эталоне».
+// Ручная эталонная разметка (data/case04_etalon.md) в виде данных: для тестов и вкладки «Сверить с эталоном».
 import type { Role, Verdict } from "./types";
 
 export type EtalonRow = {

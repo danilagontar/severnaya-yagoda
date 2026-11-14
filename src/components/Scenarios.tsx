@@ -46,7 +46,7 @@ export function Scenarios({
       <section>
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="max-w-[640px]">
-            <h1 className="text-[22px] font-semibold tracking-[-0.01em] text-ink">Сценарии</h1>
+            <h1 className="text-[22px] font-semibold tracking-[-0.01em] text-ink">Проверить пилот</h1>
             <p className="mt-1 text-[13.5px] text-muted-foreground text-pretty">
               Всё, что меняет данные, это событие: письмо, приёмка, подпись, решение бухгалтера. После каждого события очередь пересчитывается, а на плитках сверху появляется
               разница. В продукте письма придут из почты, приёмка из 1С:ERP, подписи из Directum RX; здесь это имитация. Состояние хранится только в этом браузере.
@@ -57,24 +57,28 @@ export function Scenarios({
               <Undo2 />
               Отменить последнее
             </Button>
-            {confirmReset ? (
-              <span className="inline-flex items-center gap-2 text-[13px] text-ink">
-                Сбросить всё?
-                <Button size="sm" onClick={() => (onReset(), setConfirmReset(false))}>
-                  Да, сбросить
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setConfirmReset(false)}>
-                  Нет
-                </Button>
-              </span>
-            ) : (
-              <Button size="sm" variant="outline" onClick={() => setConfirmReset(true)} disabled={!events.length}>
-                <RotateCcw />
-                Сбросить демо
-              </Button>
-            )}
+            {/* кнопка не меняется при подтверждении: вопрос появляется отдельной строкой ниже, ничего не сдвигается под курсором */}
+            <Button size="sm" variant="outline" onClick={() => setConfirmReset(!confirmReset)} disabled={!events.length} aria-expanded={confirmReset}>
+              <RotateCcw />
+              Сбросить демо
+            </Button>
           </div>
         </div>
+        {confirmReset && events.length > 0 && (
+          <div role="alertdialog" aria-label="Сбросить демо" className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-[8px] border border-stop/40 bg-stop/[0.06] px-4 py-3">
+            <p className="text-[13.5px] text-ink">
+              Удалить все события ({events.length}) и вернуть данные к выгрузке кейса? Отменить сброс нельзя.
+            </p>
+            <div className="flex gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setConfirmReset(false)}>
+                Нет
+              </Button>
+              <Button size="sm" variant="destructive" onClick={() => (onReset(), setConfirmReset(false))}>
+                Да, сбросить
+              </Button>
+            </div>
+          </div>
+        )}
       </section>
 
       {form}

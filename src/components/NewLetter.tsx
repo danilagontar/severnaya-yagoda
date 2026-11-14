@@ -1,40 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { ScanSearch } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { LlmMode } from "@/llm/provider";
 
 /**
- * Своё письмо: первый блок вкладки «Сценарии». В продукте письма приходят из общего ящика сами,
- * здесь вставка письма имитирует почту. По кнопке «Новое письмо» в шапке (focus)
- * форма прокручивается в видимую область и курсор ставится в поле текста; при обычном входе во вкладку нет.
+ * Своё письмо: первый блок вкладки «Проверить пилот». В продукте письма приходят из общего ящика сами,
+ * здесь вставка письма имитирует почту. Курсор в поле сам не ставится: на телефоне это открывало бы клавиатуру.
  */
-export function NewLetter({
-  onSubmit,
-  llm,
-  nextId,
-  focus,
-  onFocused,
-}: {
-  onSubmit: (sender: string, text: string) => Promise<void>;
-  llm: LlmMode;
-  nextId: string;
-  focus: boolean; // перейти к форме и поставить курсор (только по кнопке «Новое письмо», не при каждом входе во вкладку)
-  onFocused: () => void;
-}) {
+export function NewLetter({ onSubmit, llm, nextId }: { onSubmit: (sender: string, text: string) => Promise<void>; llm: LlmMode; nextId: string }) {
   const [sender, setSender] = useState("");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
-  const boxRef = useRef<HTMLElement>(null);
-
-  useEffect(() => {
-    if (!focus) return;
-    boxRef.current?.scrollIntoView({ block: "start" });
-    textRef.current?.focus({ preventScroll: true });
-    onFocused();
-  }, [focus, onFocused]);
 
   const submit = async () => {
     if (!text.trim()) {
@@ -54,7 +33,7 @@ export function NewLetter({
   };
 
   return (
-    <section ref={boxRef} aria-labelledby="new-h" className="scroll-mt-4 flex flex-col gap-4 rounded-[8px] border border-line bg-surface p-4 sm:p-5">
+    <section aria-labelledby="new-h" className="flex flex-col gap-4 rounded-[8px] border border-line bg-surface p-4 sm:p-5">
       <div>
         <h2 id="new-h" className="text-[17px] font-semibold text-ink">
           Своё письмо
@@ -83,9 +62,6 @@ export function NewLetter({
           ref={textRef}
           value={text}
           onChange={(e) => (setText(e.target.value), setErr(null))}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) submit();
-          }}
           rows={6}
           placeholder="Вставьте текст письма…"
           className="bg-surface text-[14px] leading-relaxed"
@@ -93,12 +69,11 @@ export function NewLetter({
         <span className="text-[12px] text-muted-foreground">Например: «Счёт 130 по ЗП-07: термоэтикетка 100×150, 2 рулона по 1000 шт., цена рулона 1500 руб. Итого 3 000 руб.»</span>
       </label>
       {err && <p className="text-[13px] text-stop">{err}</p>}
-      <div className="flex flex-wrap items-center gap-2">
+      <div>
         <Button onClick={submit} disabled={busy}>
           <ScanSearch />
           {busy ? "Проверяю…" : "Проверить письмо"}
         </Button>
-        <span className="text-[12px] text-muted-foreground">Ctrl+Enter</span>
       </div>
     </section>
   );
