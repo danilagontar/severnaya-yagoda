@@ -20,6 +20,11 @@ import { VERDICT, fmtRub } from "@/components/verdict";
 import { Sep } from "@/components/sep";
 
 const data = rawData as CaseData;
+// Срез данных кейса: всё, что происходит в пилоте (письма, приёмка, решения), идёт после него.
+const SNAP = (() => {
+  const m = data.meta.snapshot.match(/(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})/);
+  return m ? new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]) : new Date();
+})();
 type View = "queue" | "registry" | "scenarios" | "etalon";
 
 const load = <T,>(k: string, d: T): T => {
@@ -61,7 +66,7 @@ export default function App() {
   const deltaTimer = useRef<number | undefined>(undefined);
   const [flash, setFlash] = useState(0);
   // «Новое письмо» в шапке: переход во вкладку «Сценарии» к форме письма
-  const [letterFocus, setLetterFocus] = useState(0);
+  const [letterFocus, setLetterFocus] = useState(false);
   // направление подсветки плиток: живёт до следующего события, чтобы цвет догас, даже когда цифры уже скрыты
   const [flashDelta, setFlashDelta] = useState<Partial<Metrics> | null>(null);
   const [tick, setTick] = useState(0);
@@ -132,11 +137,7 @@ export default function App() {
 
   const addLetter = async (sender: string, text: string) => {
     const id = nextId;
-    // Новое письмо не может прийти раньше среза данных: иначе в сортировке «Сначала новые» оно окажется ниже старых.
-    const now = new Date();
-    const snap = data.meta.snapshot.match(/(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})/);
-    const snapAt = snap ? new Date(+snap[3], +snap[2] - 1, +snap[1], +snap[4], +snap[5]) : now;
-    const at = now > snapAt ? now : new Date(snapAt.getTime() + (extra.length + 1) * 60_000);
+    const at = clock();
     const letter: Letter = { id, received: `${String(at.getDate()).padStart(2, "0")}.${String(at.getMonth() + 1).padStart(2, "0")} ${at.toTimeString().slice(0, 5)}`, sender: sender || "", text };
     let cache = llmCache;
     if (llm.mode === "gigachat") {
@@ -145,7 +146,7 @@ export default function App() {
       setLlmCache(cache);
       setTick((t) => t + 1);
     }
-    apply([...events, makeEvent({ type: "letter", letter })], { label: `Пришло письмо ${id}`, ex: (t, s) => cache[s + "\n" + t] ?? extractByRules(t, s) });
+    apply([...events, makeEvent({ type: "letter", letter }, at)], { label: `Пришло письмо ${id}`, ex: (t, s) => cache[s + "\n" + t] ?? extractByRules(t, s) });
     setSelected(id);
     setView("queue");
   };
@@ -188,6 +189,14 @@ export default function App() {
     }
     setEvents(next);
   };
+  /**
+   * Часы кейса: события не могут случиться раньше среза данных (16.11 12:00), иначе в журнале и истории
+   * они окажутся раньше писем кейса. Пока реальное время раньше среза, каждое событие идёт через минуту после предыдущего.
+   */
+  const clock = () => {
+    const now = new Date();
+    return now > SNAP ? now : new Date(SNAP.getTime() + (events.length + 1) * 60_000);
+  };
   const push = (e: AppEvent) => apply([...events, e]);
   const undoLast = () => events.length && apply(events.slice(0, -1), { label: `Отменено: ${describeEvent(events[events.length - 1])}` });
   const removeEvent = (id: string) => {
@@ -199,16 +208,16 @@ export default function App() {
     apply([], { label: "Демо сброшено: исходные 25 документов" });
     setSelected(null);
   };
-  const runScenario = (sc: Scenario) => apply([...events, makeEvent(sc.event)], { label: sc.title });
+  const runScenario = (sc: Scenario) => apply([...events, makeEvent(sc.event, clock())], { label: sc.title });
   const timeline = useMemo(() => (current?.orderId ? orderTimeline(data, events, results, current.orderId) : []), [current?.orderId, events, results]);
   /** Решение бухгалтера (null: вернуть в работу). Возвращает текст ошибки, если решение не подходит. */
   const decide = (r: (typeof results)[number], d: Decision | null): string | null => {
     if (!d) {
-      push(makeEvent({ type: "reopen", doc: r.id }));
+      push(makeEvent({ type: "reopen", doc: r.id }, clock()));
       return null;
     }
     const err = validateDecision(r, d);
-    if (!err) push(makeEvent({ type: "decision", doc: r.id, decision: d }));
+    if (!err) push(makeEvent({ type: "decision", doc: r.id, decision: d }, clock()));
     return err;
   };
 
@@ -243,11 +252,12 @@ export default function App() {
     </>
   );
 
-  const NAV: { id: View; label: string }[] = [
-    { id: "queue", label: "Очередь" },
-    { id: "registry", label: "Реестр" },
-    { id: "scenarios", label: "Сценарии" },
-    { id: "etalon", label: "Проверка на эталоне" },
+  // short: подпись на телефоне и планшете (до 1024 px), чтобы вкладки и кнопки шапки помещались в ширину экрана
+  const NAV: { id: View; label: string; short: string }[] = [
+    { id: "queue", label: "Очередь", short: "Очередь" },
+    { id: "registry", label: "Реестр", short: "Реестр" },
+    { id: "scenarios", label: "Сценарии", short: "Сценарии" },
+    { id: "etalon", label: "Проверка на эталоне", short: "Эталон" },
   ];
 
   return (
@@ -261,20 +271,21 @@ export default function App() {
             <p className="hidden text-[11.5px] text-rail-muted sm:block">Проверка счетов поставщиков</p>
           </div>
         </div>
-        <nav aria-label="Разделы" className="order-last flex h-10 w-full items-stretch md:order-none md:h-full md:w-auto">
+        <nav aria-label="Разделы" className="order-last flex h-10 w-full items-stretch overflow-x-auto md:order-none md:h-full md:w-auto md:overflow-visible">
           {NAV.map((n) => (
             <button
               key={n.id}
               onClick={() => setView(n.id)}
               aria-current={view === n.id ? "page" : undefined}
               className={cn(
-                "relative px-3.5 text-[13.5px] whitespace-nowrap transition-colors",
+                "relative flex-1 px-2 text-[13.5px] whitespace-nowrap transition-colors sm:flex-none sm:px-3.5",
                 view === n.id
                   ? "bg-white/10 font-semibold text-white after:absolute after:inset-x-0 after:bottom-0 after:h-[3px] after:bg-rail-active"
                   : "text-rail-muted hover:bg-white/5 hover:text-rail-fg",
               )}
             >
-              {n.label}
+              <span className="lg:hidden">{n.short}</span>
+              <span className="hidden lg:inline">{n.label}</span>
             </button>
           ))}
         </nav>
@@ -293,7 +304,7 @@ export default function App() {
             size="sm"
             onClick={() => {
               setView("scenarios");
-              setLetterFocus((n) => n + 1);
+              setLetterFocus(true);
             }}
           >
             <Plus />
@@ -433,12 +444,12 @@ export default function App() {
               registry={registry}
               onSelect={select}
               snapshot={data.meta.snapshot}
-              onSubmit={() => push(makeEvent({ type: "registry-submitted", ids: registry.items.map((i) => i.r.id), total: registry.total }))}
-              onApprove={() => push(makeEvent({ type: "registry-approved" }))}
+              onSubmit={() => push(makeEvent({ type: "registry-submitted", ids: registry.items.map((i) => i.r.id), total: registry.total }, clock()))}
+              onApprove={() => push(makeEvent({ type: "registry-approved" }, clock()))}
             />}
           {view === "scenarios" && (
             <Scenarios
-              form={<NewLetter onSubmit={addLetter} llm={llm.mode} nextId={nextId} focusKey={letterFocus} />}
+              form={<NewLetter onSubmit={addLetter} llm={llm.mode} nextId={nextId} focus={letterFocus} onFocused={() => setLetterFocus(false)} />}
               events={events}
               preview={(body) => {
                 const after = computeState(data, [...events, makeEvent(body)], extractor);

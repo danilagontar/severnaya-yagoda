@@ -6,10 +6,22 @@ import type { LlmMode } from "@/llm/provider";
 
 /**
  * Своё письмо: первый блок вкладки «Сценарии». В продукте письма приходят из общего ящика сами,
- * здесь вставка письма имитирует почту. focusKey меняется по кнопке «Новое письмо» в шапке:
- * форма прокручивается в видимую область, курсор ставится в поле текста.
+ * здесь вставка письма имитирует почту. По кнопке «Новое письмо» в шапке (focus)
+ * форма прокручивается в видимую область и курсор ставится в поле текста; при обычном входе во вкладку нет.
  */
-export function NewLetter({ onSubmit, llm, nextId, focusKey }: { onSubmit: (sender: string, text: string) => Promise<void>; llm: LlmMode; nextId: string; focusKey: number }) {
+export function NewLetter({
+  onSubmit,
+  llm,
+  nextId,
+  focus,
+  onFocused,
+}: {
+  onSubmit: (sender: string, text: string) => Promise<void>;
+  llm: LlmMode;
+  nextId: string;
+  focus: boolean; // перейти к форме и поставить курсор (только по кнопке «Новое письмо», не при каждом входе во вкладку)
+  onFocused: () => void;
+}) {
   const [sender, setSender] = useState("");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -18,10 +30,11 @@ export function NewLetter({ onSubmit, llm, nextId, focusKey }: { onSubmit: (send
   const boxRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    if (!focusKey) return;
+    if (!focus) return;
     boxRef.current?.scrollIntoView({ block: "start" });
     textRef.current?.focus({ preventScroll: true });
-  }, [focusKey]);
+    onFocused();
+  }, [focus, onFocused]);
 
   const submit = async () => {
     if (!text.trim()) {

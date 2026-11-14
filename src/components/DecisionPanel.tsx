@@ -2,16 +2,12 @@ import { useState } from "react";
 import { Check, CircleSlash, Clock, RotateCcw, Send, Undo2, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { DECISION_LABEL, type Decision, type DocStatus } from "@/core/events";
+import { DECISION_LABEL, atLabel, type Decision, type DocStatus } from "@/core/events";
 import type { Result } from "@/core/types";
 import { fmtRub } from "./verdict";
 import { Sep } from "@/components/sep";
 
-export const fmtAt = (iso: string | null) => {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")} ${d.toTimeString().slice(0, 5)}`;
-};
+export const fmtAt = atLabel;
 
 const HINT: Partial<Record<Result["verdict"], string>> = {
   pay: "Сверка пройдена. В реестр счёт попадёт только после подтверждения.",

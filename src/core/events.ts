@@ -237,7 +237,7 @@ export function computeState(base: CaseData, events: AppEvent[], extractor?: Ext
 
 export interface TimelineItem {
   key: string;
-  when: string; // «03.11», «12.11 09:15», «сейчас»
+  when: string; // «03.11», «12.11 09:15»
   text: string;
   source: string; // 1С:ERP, Directum RX, почта, бухгалтер
   docId?: string; // ссылка на документ очереди
@@ -277,9 +277,9 @@ export function orderTimeline(base: CaseData, events: AppEvent[], results: Resul
   // события журнала по этому заказу
   for (const e of events) {
     if (e.type === "acceptance" && e.order === orderId)
-      out.push({ key: e.id, when: "сейчас", text: `Приёмка +${e.qty.toLocaleString("ru-RU")} ${o.unit}`, source: "1С:ERP", simulated: true });
+      out.push({ key: e.id, when: atLabel(e.at), text: `Приёмка +${e.qty.toLocaleString("ru-RU")} ${o.unit}`, source: "1С:ERP", simulated: true });
     else if (e.type === "approval-signed" && base.approvals.some((a) => a.id === e.approval && a.order === orderId))
-      out.push({ key: e.id, when: "сейчас", text: `${e.approval} подписано`, source: "Directum RX", simulated: true });
+      out.push({ key: e.id, when: atLabel(e.at), text: `${e.approval} подписано`, source: "Directum RX", simulated: true });
     else if (e.type === "letter") {
       const r = results.find((x) => x.id === e.letter.id);
       if (r?.orderId === orderId)
@@ -319,6 +319,13 @@ export function metricsDelta(a: Metrics, b: Metrics): Partial<Metrics> {
   const out: Partial<Metrics> = {};
   for (const k of Object.keys(a) as (keyof Metrics)[]) if (Math.abs(b[k] - a[k]) > EPS) out[k] = round2(b[k] - a[k]);
   return out;
+}
+
+/** Время события как в данных кейса: «ДД.ММ ЧЧ:ММ». */
+export function atLabel(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")} ${d.toTimeString().slice(0, 5)}`;
 }
 
 /** Короткое описание события для баннера и журнала. */
