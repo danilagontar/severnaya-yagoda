@@ -282,8 +282,8 @@ export function Queue({
                     const isSel = r.id === selected;
                     // сверка пройдена, но платёж задержан из-за реквизитов (как в итогах)
                     const held = r.verdict === "ask" && r.findings.some((f) => f.rule === "П-2");
-                    // у письма: номер связанного счёта
-                    const letterTo = r.ex.kind === "letter" ? r.related.map((id) => byId.get(id)?.ex.invoiceNo).find(Boolean) : undefined;
+                    // у письма: номер счёта, к которому оно относится (свой или связанного документа), как в карточке
+                    const letterTo = r.ex.kind === "letter" ? r.ex.invoiceNo ?? r.ex.invoiceRef ?? r.related.map((id) => byId.get(id)?.ex.invoiceNo).find(Boolean) : undefined;
                     return (
                       <li key={r.id}>
                         <button

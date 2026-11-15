@@ -29,8 +29,8 @@ const FIELD_LABEL: Partial<Record<FieldKey, string>> = {
   promise: "обещание поставки",
 };
 const BINDING: Record<Result["binding"], string> = {
-  number: "по номеру заказа",
-  attributes: "найден без номера: по поставщику, материалу, количеству и дате",
+  number: "заказ найден по номеру",
+  attributes: "заказ найден без номера: по поставщику, материалу, количеству и дате",
   probable: "вероятный заказ настоящего поставщика",
   none: "заказ не найден",
 };
@@ -204,6 +204,9 @@ export function DocCard({
 
   const m = moneyLines(r, status);
 
+  // у письма: номер счёта, к которому оно относится (свой или связанного документа), как в очереди
+  const letterTo = isLetter ? r.ex.invoiceNo ?? r.ex.invoiceRef ?? r.related.map((id) => all.find((y) => y.id === id)?.ex.invoiceNo).find(Boolean) : undefined;
+
   // Связанные документы, которых нет в истории заказа (другой заказ или заказ не найден): показываются под историей
   const inTimeline = new Set(timeline.flatMap((t) => (t.docId ? [t.docId] : [])));
   const others = r.related.filter((id) => !inTimeline.has(id)).flatMap((id) => {
@@ -290,19 +293,22 @@ export function DocCard({
           <p className="num text-[13px] text-muted-foreground">
             {r.id}<Sep />получено {r.received}<Sep />{r.ex.senderEmail ?? r.sender}
           </p>
-          <h1 id="doc-title" className="mt-1 text-[22px] font-semibold leading-tight tracking-[-0.01em] text-ink text-balance">
-            {r.supplier ?? r.ex.senderName ?? "Отправитель не указан"}
-            {r.ex.invoiceNo && <span className="font-normal"><Sep />счёт {r.ex.invoiceNo}</span>}
+          {/* номер счёта и заказа первыми, как в строке очереди: по ним бухгалтер ищет документ; дальше поставщик */}
+          <h1 id="doc-title" className="num mt-1 text-[22px] font-semibold leading-tight tracking-[-0.01em] text-ink text-balance">
+            {isLetter ? (
+              <>Письмо{letterTo && <span className="font-normal"><Sep />к счёту {letterTo}</span>}</>
+            ) : (
+              <>
+                {r.ex.invoiceNo ? `Счёт ${r.ex.invoiceNo}` : "Счёт без номера"}
+                {r.orderId && <span className="font-normal"><Sep />{r.orderId}</span>}
+              </>
+            )}
             {r.ex.kind === "correction" && <span className="font-normal text-muted-foreground"> (исправленный)</span>}
+            {/* поставщик в той же строке, обычным начертанием */}
+            <span className="font-normal"><Sep />{r.supplier ?? r.ex.senderName ?? "Отправитель не указан"}</span>
           </h1>
           <p className="mt-1 text-[13px] text-muted-foreground">
-            {r.orderId ? (
-              <>
-                <span className="font-medium text-ink">{r.orderId}</span>: {isLetter ? "по связанному документу" : BINDING[r.binding]}
-              </>
-            ) : (
-              BINDING[r.binding]
-            )}
+            {isLetter ? (r.orderId ? `заказ ${r.orderId} по связанному счёту` : BINDING[r.binding]) : BINDING[r.binding]}
             {r.orderSummary && <><Sep />{r.orderSummary}</>}
           </p>
         </div>
