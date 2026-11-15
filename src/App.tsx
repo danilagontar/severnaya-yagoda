@@ -19,6 +19,7 @@ import { LlmUsage } from "@/components/LlmUsage";
 import { VERDICT, fmtRub } from "@/components/verdict";
 import { Sep } from "@/components/sep";
 import { Today } from "@/components/Today";
+import { ScrollTop } from "@/components/ScrollTop";
 
 const data = rawData as CaseData;
 // Срез данных кейса: всё, что происходит в пилоте (письма, приёмка, решения), идёт после него.
@@ -427,6 +428,7 @@ export default function App() {
         <aside className="my-3 ml-3 hidden w-[360px] shrink-0 flex-col overflow-hidden rounded-xl border border-line bg-surface-2 md:flex">{queuePanel}</aside>
 
         {/* Узкий экран: та же очередь (поиск, фильтры, группы) на весь экран */}
+        {!mobileQueue && <ScrollTop />}
         {mobileQueue && (
           <div role="dialog" aria-modal="true" aria-label="Очередь документов" className="fixed inset-0 z-40 flex flex-col bg-surface-2 md:hidden">
             <div className="flex h-12 shrink-0 items-center justify-between border-b border-line bg-surface px-4">
