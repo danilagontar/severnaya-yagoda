@@ -11,6 +11,7 @@ import { VERDICT, VerdictTag, fmtRub, verdictTextColor } from "./verdict";
 import { Sep } from "@/components/sep";
 import { DecisionPanel } from "@/components/DecisionPanel";
 import type { Decision, DocStatus, TimelineItem } from "@/core/events";
+import { atLabel } from "@/core/events";
 import { OrderTimeline } from "@/components/OrderTimeline";
 import { AiHint, hintFor, type ConfirmField } from "@/components/AiHint";
 
@@ -565,7 +566,8 @@ function moneyLines(r: Result, s: DocStatus) {
   const who = r.addressees[0]?.name;
   type State = { label: string; amount?: number; tone?: string; hint?: string };
   let state: State;
-  if (s.inRegistry) state = { label: s.decision?.kind === "pay-override" ? "В реестре по решению" : "В реестре", amount: s.amount, tone: "text-pay" };
+  if (s.paid) state = { label: "Оплачено", amount: s.paid.amount, tone: "text-pay", hint: `платёж создан ${atLabel(s.paid.at)}` };
+  else if (s.inRegistry) state = { label: s.decision?.kind === "pay-override" ? "В реестре по решению" : "В реестре", amount: s.amount, tone: "text-pay" };
   else if (r.verdict === "pay") state = { label: "К оплате", amount: r.payNow, tone: "text-ink", hint: "В реестр попадёт после подтверждения" };
   else if (r.verdict === "ask" && rules.includes("П-2")) state = { label: "Задержан до допсоглашения о реквизитах" };
   else if (r.verdict === "ask") state = { label: who ? `Платёж после ответа: ${who}` : "Платёж после ответа" };

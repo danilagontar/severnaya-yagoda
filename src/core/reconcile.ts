@@ -67,6 +67,8 @@ export function applyConfirmed(ex: Extracted, conf: FieldConfirmations | undefin
 }
 
 const EPS = 0.005;
+// «уже приняты вашим складом», «доставили», «отгрузили»: поставщик утверждает, что поставка была (П-9: это вопрос складу)
+const DELIVERED = /(?<![а-яё])(?:принят[аоы]?|приняли|доставлен[аоы]?|доставили|привезли|получили|отгрузили)(?![а-яё])/i;
 const CFO = "Финансовый директор";
 const WAREHOUSE = "Начальник склада";
 const TREASURER = "Казначей";
@@ -242,6 +244,7 @@ export function reconcileAll(
   extractor: Extractor = extractByRules,
   newIds: Set<string> = new Set(),
   confirmed: Map<string, FieldConfirmations> = new Map(),
+  paid: Map<string, number> = new Map(), // уже оплаченные документы и сумма платежа (реестр оплачен, П-9)
 ): Result[] {
   const orders = data.orders;
   const approvals = data.approvals.map(parseApproval);
@@ -262,6 +265,9 @@ export function reconcileAll(
     const s = resolveSupplier(ex, orders);
     if (s.status === "known" && ex.senderDomain && !firstDomain.has(s.name!)) firstDomain.set(s.name!, ex.senderDomain);
   }
+  // П-2: смена реквизитов действует только по подписанному допсоглашению в Directum RX по заказу этого поставщика
+  const requisitesApproval = (supplier: string | null) =>
+    supplier ? approvals.find((a) => a.signed && /реквизит|получател|расч[её]тн|банк/i.test(a.text) && orders.find((o) => o.id === a.order)?.supplier === supplier) ?? null : null;
   const invoices = exs.filter((x) => x.ex.kind !== "letter");
   const notes = exs.filter((x) => x.ex.kind === "letter");
 
@@ -337,7 +343,10 @@ export function reconcileAll(
     // --- 1. Поставщик и реквизиты (П-2)
     const homeDomain = sup.status === "known" ? firstDomain.get(sup.name!) : undefined;
     const foreignDomain = !!(homeDomain && ex.senderDomain && ex.senderDomain !== homeDomain);
-    if (sup.status === "lookalike" || (sup.status === "known" && (ex.requisitesChange || foreignDomain))) {
+    const reqSigned = sup.status === "known" && ex.requisitesChange ? requisitesApproval(sup.name) : null;
+    if (reqSigned)
+      r.findings.push({ rule: "П-2", level: "info", text: `Новые реквизиты по подписанному ${reqSigned.id} в Directum RX.`, source: reqSigned.id });
+    if (sup.status === "lookalike" || (sup.status === "known" && ((ex.requisitesChange && !reqSigned) || foreignDomain))) {
       const baseSupplier = sup.base ?? sup.name!;
       const probable = ex.orderNo ? orders.find((o) => o.id === ex.orderNo) ?? null : bindByAttributes(baseSupplier, ex, orders).order;
       r.orderId = probable?.id ?? null;
@@ -357,7 +366,7 @@ export function reconcileAll(
       }
       if (foreignDomain)
         r.findings.push({ rule: "П-2", level: "stop", text: `Название как у поставщика, но почта с другого домена: ${ex.senderDomain}; «${baseSupplier}» пишет с ${homeDomain}. Признак подмены отправителя.` });
-      if (ex.requisitesChange)
+      if (ex.requisitesChange && !reqSigned)
         r.findings.push({ rule: "П-2", level: "stop", text: "Просят платить по новым реквизитам. Подписанного допсоглашения о смене получателя в Directum RX нет." });
       r.brief = sup.status === "lookalike" ? "Похожее юрлицо, новые реквизиты" : ex.requisitesChange ? "Новые реквизиты без допсоглашения" : "Чужой домен почты";
       r.headline =
@@ -389,7 +398,13 @@ export function reconcileAll(
     const key = ex.invoiceNo ? `${sup.name}|${normInvoiceNo(ex.invoiceNo)}` : null;
     const prevId = key ? invoiceIndex.get(key) : undefined;
     const prev = prevId ? byId.get(prevId) : undefined;
-    if (prev && ex.kind === "correction") {
+    // исправленный счёт к уже оплаченной версии: деньги ушли, второй раз не платим (П-3 не про оплаченные счета)
+    const paidBefore = prev && ex.kind === "correction" ? paid.get(prev.id) ?? null : null;
+    if (prev && ex.kind === "correction" && paidBefore !== null) {
+      if (prev.orderId) claims.set(prev.orderId, (claims.get(prev.orderId) ?? []).filter((c) => c.id !== prev.id));
+      link(r, prev);
+      r.findings.push({ rule: "П-3", level: "info", text: `Исправленная версия счёта ${prev.ex.invoiceNo} (${prev.id}).`, source: prev.id });
+    } else if (prev && ex.kind === "correction") {
       prev.verdict = "duplicate";
       prev.replacedBy = r.id;
       prev.payNow = 0;
@@ -603,6 +618,10 @@ export function reconcileAll(
         });
       }
       if (ex.promise) r.findings.push({ rule: "П-4", level: "info", text: `Обещание «${ex.promise}» приёмкой не считается.` });
+      // П-9: вопрос о приёмке задают начальнику склада, когда поставщик пишет, что товар уже доставлен или принят,
+      // а в ERP столько не проведено. Сроки поставки и условия договора: закупщику.
+      if (DELIVERED.test(l.text))
+        addAddr(r, { role: "warehouse", name: WAREHOUSE, reason: `поставщик пишет о поставке, в ERP принято ${num(order.accepted)} ${order.unit}` });
       // П-5: только если часть счёта в пределах заказа, но ещё не принята (это и есть предоплата).
       // Если всё принятое уже выставлено и счёт выходит за заказ: это лишний счёт (П-3, сводка по заказу ниже).
       const prepaid = Math.min(before + conv.qty, approvedQty) > Math.max(before, order.accepted) + EPS;
@@ -617,6 +636,25 @@ export function reconcileAll(
 
     // --- итог
     r.due = round2(billable * payPrice);
+    if (paidBefore !== null && prev) {
+      const diff = round2(r.due - paidBefore);
+      r.findings.push({
+        rule: "П-3",
+        level: "ask",
+        tag: "paid-before",
+        short: "прежняя версия уже оплачена",
+        text:
+          diff > EPS
+            ? `Прежняя версия ${prev.id} уже оплачена: ${rub(paidBefore)}. Повторно не платим, к доплате только разница ${rub(diff)}.`
+            : diff < -EPS
+              ? `Прежняя версия ${prev.id} уже оплачена: ${rub(paidBefore)}, это больше исправленного счёта на ${rub(-diff)}. Доплачивать нечего, переплату нужно вернуть у поставщика.`
+              : `Прежняя версия ${prev.id} уже оплачена: ${rub(paidBefore)}. Доплачивать нечего.`,
+        source: prev.id,
+      });
+      r.prevented.push({ category: "duplicate", amount: round2(Math.min(paidBefore, r.due)) });
+      r.due = Math.max(0, diff);
+      addAddr(r, { role: "supplier", name: sup.name!, email: ex.senderEmail ?? undefined, reason: `прежняя версия ${prev.id} уже оплачена` });
+    }
     (claims.get(order.id) ?? claims.set(order.id, []).get(order.id)!).push({ id: r.id, qty: conv.qty });
     r.compare = compareRows(r, order, conv, approvals, null, { effPrice, priceSource, approvedQty, billable });
     finalizeVerdict(r, arithmeticError);
@@ -685,7 +723,20 @@ export function reconcileAll(
     const order = orders.find((o) => o.id === r.orderId) ?? null;
     const tIds = targets.map((t) => t.id).join(", ");
 
-    if (ex.topic === "requisites") {
+    // поставщик пишет, что поставка уже принята, а в ERP её нет: вопрос складу (П-9)
+    if (DELIVERED.test(l.text))
+      for (const t of targets.filter((x) => x.findings.some((f) => f.rule === "П-4" && f.level === "ask"))) {
+        const wh = { role: "warehouse" as const, name: WAREHOUSE, reason: "поставщик пишет, что поставка принята, в ERP приёмки нет" };
+        addAddr(t, wh);
+        addAddr(r, wh);
+        t.findings.push({ rule: "П-4", level: "info", text: `${r.id}: поставщик пишет, что поставка принята, а в ERP столько не проведено. Уточните у склада (П-9).`, source: r.id });
+      }
+    const letterReqSigned = ex.topic === "requisites" && sup.status === "known" ? requisitesApproval(sup.name) : null;
+    if (letterReqSigned) {
+      r.headline = `Новые реквизиты по подписанному ${letterReqSigned.id}${tIds ? `, к ${tIds}` : ""}`;
+      r.brief = "Реквизиты по допсоглашению";
+      r.findings.push({ rule: "П-2", level: "info", text: `Смена реквизитов оформлена подписанным ${letterReqSigned.id} в Directum RX: платёж не задерживаем.`, source: letterReqSigned.id });
+    } else if (ex.topic === "requisites") {
       r.verdict = "stop";
       r.headline = `Смена реквизитов письмом без допсоглашения${tIds ? `, к ${tIds}` : ""}`;
       r.brief = "Смена реквизитов без допсоглашения";

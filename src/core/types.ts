@@ -143,6 +143,7 @@ export interface Finding {
   short?: string; // тема в несколько слов для заголовка, когда тем у счёта несколько
   source?: string; // ЗП-04, СГ-05, «приёмка», В-25…
   field?: CrossField["key"]; // поле разбора, которое ждёт подтверждения бухгалтера
+  tag?: "paid-before"; // исправленный счёт к уже оплаченной версии: доплатить можно только разницу
 }
 
 export type Role = "buyer" | "supplier" | "warehouse" | "treasurer" | "cfo" | "procurement";

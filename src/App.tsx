@@ -207,6 +207,9 @@ export default function App() {
     return now > SNAP ? now : new Date(SNAP.getTime() + (events.length + 1) * 60_000);
   };
   const push = (e: AppEvent) => apply([...events, e]);
+  // казначей оплатил утверждённый реестр (в продукте: по банковской выписке)
+  const payRegistry = () =>
+    apply([...events, makeEvent({ type: "registry-paid", items: registry.items.map((i) => ({ id: i.r.id, amount: i.amount })), total: registry.total }, clock())], { label: "Реестр оплачен казначеем" });
   const undoLast = () => events.length && apply(events.slice(0, -1), { label: `Отменено: ${describeEvent(events[events.length - 1])}` });
   const removeEvent = (id: string) => {
     const e = events.find((x) => x.id === id);
@@ -494,6 +497,7 @@ export default function App() {
               snapshot={data.meta.snapshot}
               onSubmit={() => push(makeEvent({ type: "registry-submitted", ids: registry.items.map((i) => i.r.id), total: registry.total }, clock()))}
               onApprove={() => push(makeEvent({ type: "registry-approved" }, clock()))}
+              onPay={payRegistry}
             />}
           {view === "scenarios" && (
             <Scenarios

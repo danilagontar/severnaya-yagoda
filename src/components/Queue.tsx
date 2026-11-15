@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Archive, ArrowDown, ArrowUp, Check, CheckCheck, ChevronDown, CircleAlert, CircleCheck, EyeOff, Hourglass, Search, SlidersHorizontal, X, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Addressee, Result, Verdict } from "@/core/types";
-import { DECISION_LABEL, type DocStatus } from "@/core/events";
+import { DECISION_LABEL, WAIT_LIMIT_DAYS, waitingDays, type DocStatus } from "@/core/events";
 import { VERDICT, VerdictIcon, fmtRub } from "./verdict";
 import { Sep } from "@/components/sep";
 
@@ -66,18 +66,22 @@ const GROUP_STYLE: Record<string, { icon: LucideIcon; color: string }> = {
   pay: { icon: CircleCheck, color: "var(--v-pay)" },
   resolved: { icon: CheckCheck, color: "var(--v-pay)" },
   none: { icon: Archive, color: "var(--v-dup)" },
+  archive: { icon: Archive, color: "var(--v-dup)" },
 };
 
 // Группа зависит от вердикта и от решения бухгалтера: решённое уходит в «Решено», отправленный вопрос: в «Ждём ответа».
 // Снятое решение (вердикт изменился) не считается: документ возвращается в свою группу.
-const NO: DocStatus = { decision: null, at: null, valid: false, stale: null, waiting: false, resolved: false, inRegistry: false, amount: 0 };
+const NO: DocStatus = { decision: null, at: null, valid: false, stale: null, waiting: false, resolved: false, inRegistry: false, amount: 0, sent: [], remaining: [], paid: null, archived: false };
 export const GROUPS: { id: string; title: string; verdicts: Verdict[]; match: (r: Result, s: DocStatus) => boolean }[] = [
   { id: "decide", title: "Требует решения", verdicts: ["stop", "return", "ask"], match: (r, s) => ["stop", "return", "ask"].includes(r.verdict) && !s.valid },
-  { id: "waiting", title: "Ждём ответа", verdicts: [], match: (r, s) => s.waiting },
+  // ждём: ответ на вопрос или исправленный счёт от поставщика
+  { id: "waiting", title: "Ждём ответа", verdicts: [], match: (r, s) => s.waiting || (s.valid && s.decision?.kind === "returned") },
   { id: "pay", title: "К оплате: подтвердить", verdicts: ["pay"], match: (r, s) => r.verdict === "pay" && !s.valid },
-  { id: "resolved", title: "Решено", verdicts: [], match: (r, s) => s.resolved },
+  { id: "resolved", title: "Решено", verdicts: [], match: (r, s) => s.resolved && s.decision?.kind !== "returned" },
   { id: "none", title: "Без действий", verdicts: ["duplicate", "letter"], match: (r) => r.verdict === "duplicate" || r.verdict === "letter" },
 ];
+// архив: документы, с которыми больше не работают (оплачены, «не платить», дубли, письма к закрытым счетам)
+const ARCHIVE = { id: "archive", title: "Архив", verdicts: [] as Verdict[], match: () => true };
 const ORDER: Verdict[] = ["stop", "return", "ask", "pay", "duplicate", "letter"];
 const RANK = Object.fromEntries(ORDER.map((v, i) => [v, i])) as Record<Verdict, number>;
 // Повторное нажатие на выбранную сортировку разворачивает порядок; short: подпись на кнопке «Вид»
@@ -123,6 +127,8 @@ export function Queue({
   toggleGroup: (id: string) => void;
 }) {
   const isNew = (r: Result) => r.isNew && !seen.has(r.id); // открытый документ больше не новый
+  // новое письмо остаётся в очереди, пока его не открыли, даже если это дубль: иначе оно пропадёт сразу после прихода
+  const inArchive = (r: Result) => !!statuses.get(r.id)?.archived && !isNew(r);
   const navRef = useRef<HTMLElement>(null);
   const [opened, setOpened] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null); // группа, раскрытая только что: её строки анимируются
@@ -239,11 +245,13 @@ export function Queue({
       </div>
 
       <nav ref={navRef} aria-label="Очередь документов" className="min-h-0 flex-1 overflow-y-auto">
-        {GROUPS.map((g) => {
+        {[...GROUPS, ARCHIVE].map((g) => {
           const st = (r: Result) => statuses.get(r.id) ?? NO;
-          const items = list.filter((r) => g.match(r, st(r))).sort(cmp);
+          // архив: отдельная группа внизу; в остальных группах архивных документов нет
+          const items = list.filter((r) => (g.id === "archive" ? inArchive(r) : !inArchive(r) && g.match(r, st(r)))).sort(cmp);
           if (!items.length) return null;
-          const isCollapsed = collapsed.has(g.id) && !anyFilter; // при поиске и фильтрах группы раскрыты
+          // при поиске и фильтрах группы раскрыты; архив по умолчанию свёрнут (в наборе хранится, что его раскрыли)
+          const isCollapsed = !anyFilter && (g.id === "archive" ? !collapsed.has(g.id) : collapsed.has(g.id));
           // «Решено»: сумма в реестре; «К оплате»: по сверке; остальное: по счёту
           const sum = items.reduce((s, r) => s + (g.id === "resolved" ? st(r).amount : r.verdict === "pay" ? r.payNow : r.ex.kind === "letter" ? 0 : r.invoiced ?? 0), 0);
           return (
@@ -269,8 +277,8 @@ export function Queue({
                   })()}
                   <span>{g.title}</span>
                   <span className="num rounded-full bg-surface px-1.5 text-[12px] font-medium text-ink ring-1 ring-line">{items.length}</span>
-                  {g.id !== "none" && <span className="num ml-auto font-semibold">{fmtRub(sum)}</span>}
-                  <ChevronDown className={cn("size-4 text-muted-foreground transition-transform duration-200", g.id === "none" && "ml-auto", isCollapsed && "-rotate-90")} aria-hidden />
+                  {g.id !== "none" && g.id !== "archive" && <span className="num ml-auto font-semibold">{fmtRub(sum)}</span>}
+                  <ChevronDown className={cn("size-4 text-muted-foreground transition-transform duration-200", (g.id === "none" || g.id === "archive") && "ml-auto", isCollapsed && "-rotate-90")} aria-hidden />
                 </button>
               </h2>
               {!isCollapsed && (
@@ -278,7 +286,9 @@ export function Queue({
                   {items.map((r) => {
                     const amount = r.verdict === "pay" ? r.payNow : r.invoiced;
                     // к оплате по сверке, если она меньше счёта; у стопа и дубля платить нечего, у письма суммы нет
-                    const showDue = (r.verdict === "ask" || r.verdict === "return") && r.due !== null && r.due !== undefined && r.invoiced !== null && Math.abs(r.due - r.invoiced) > 0.005;
+                    // П-5: счёт больше принятого, условий договора нет: «ни отказ, ни оплату», сумму к оплате не показываем
+                    const needContract = r.verdict === "ask" && r.findings.some((f) => f.level === "ask" && f.rule === "П-5");
+                    const showDue = !needContract && (r.verdict === "ask" || r.verdict === "return") && r.due !== null && r.due !== undefined && r.invoiced !== null && Math.abs(r.due - r.invoiced) > 0.005;
                     const isSel = r.id === selected;
                     // сверка пройдена, но платёж задержан из-за реквизитов (как в итогах)
                     const held = r.verdict === "ask" && r.findings.some((f) => f.rule === "П-2");
@@ -324,13 +334,33 @@ export function Queue({
                             {r.supplier ?? r.ex.senderName ?? "Отправитель не указан"}
                           </span>
                           <span className="pl-1 text-right text-[11.5px] whitespace-nowrap">
-                            {st(r).valid && st(r).decision ? (
+                            {st(r).paid ? (
+                              <span className="inline-flex items-center gap-0.5 text-pay">
+                                <Check className="size-3 shrink-0" strokeWidth={2.5} aria-hidden />
+                                оплачено {st(r).paid!.at ? new Date(st(r).paid!.at).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" }) : ""}
+                              </span>
+                            ) : inArchive(r) && r.verdict === "duplicate" ? (
+                              <span className="text-muted-foreground">{r.replacedBy ? `заменён ${r.replacedBy}` : r.duplicateOf ? `копия ${r.duplicateOf}` : "дубль"}</span>
+                            ) : st(r).valid && st(r).decision?.kind === "returned" ? (
+                              <span className={cn(waitingDays(st(r).at) >= WAIT_LIMIT_DAYS ? "font-medium text-ask" : "text-muted-foreground")}>
+                                {waitingDays(st(r).at) ? `ждём исправленный ${waitingDays(st(r).at)} дн.` : "ждём исправленный"}
+                              </span>
+                            ) : st(r).waiting ? (
+                              // сколько ждём ответа: вопросы не должны зависать (дольше WAIT_LIMIT_DAYS подсвечено)
+                              <span className={cn(waitingDays(st(r).at) >= WAIT_LIMIT_DAYS ? "font-medium text-ask" : "text-muted-foreground")}>
+                                {waitingDays(st(r).at) ? `ждём ответа ${waitingDays(st(r).at)} дн.` : "ждём ответа"}
+                              </span>
+                            ) : st(r).remaining.length > 0 && !st(r).stale ? (
+                              <span className="text-stop">передать: ещё {st(r).remaining.length}</span>
+                            ) : st(r).valid && st(r).decision ? (
                               <span className={cn("inline-flex items-center gap-0.5", st(r).inRegistry ? "text-pay" : "text-muted-foreground")}>
                                 {st(r).inRegistry && <Check className="size-3 shrink-0" strokeWidth={2.5} aria-hidden />}
                                 {DECISION_LABEL[st(r).decision!.kind].toLowerCase()}
                               </span>
                             ) : st(r).stale ? (
                               <span className="text-ask">решение снято</span>
+                            ) : needContract ? (
+                              <span className="text-muted-foreground">ждём условия договора</span>
                             ) : showDue ? (
                               <span className="num text-ask">к оплате {fmtRub(r.due!)}</span>
                             ) : r.verdict === "stop" && r.ex.kind !== "letter" ? (

@@ -5,9 +5,8 @@ import { getUsage, type LlmMode, type LlmUsage as Usage } from "@/llm/provider";
 const n = (x: number) => x.toLocaleString("ru-RU");
 
 /** Расход токенов GigaChat: счётчик в шапке и сводка по клику. */
-export function LlmUsage({ mode, model, tick }: { mode: LlmMode; model: string | null; tick: number }) {
+export function LlmUsage({ mode, tick }: { mode: LlmMode; model?: string | null; tick: number }) {
   const [u, setU] = useState<Usage | null>(null);
-  const [bal, setBal] = useState<{ ok: boolean; data?: unknown; error?: string } | null>(null);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [top, setTop] = useState(0); // для телефона: панель под кнопкой, во всю ширину экрана
@@ -24,21 +23,12 @@ export function LlmUsage({ mode, model, tick }: { mode: LlmMode; model: string |
 
   const refresh = async () => {
     setLoading(true);
-    const r = await getUsage(true);
-    if (r) {
-      setU(r.usage);
-      setBal(r.balance);
-    }
+    const r = await getUsage();
+    if (r) setU(r.usage);
     setLoading(false);
   };
 
   if (mode !== "gigachat") return <span className="hidden text-[12px] text-rail-muted xl:inline">поля: правила</span>;
-
-  // остаток только для модели, которой пользуется пилот (имя модели в интерфейсе не показываем)
-  const allRows = Array.isArray((bal?.data as { balance?: unknown[] })?.balance) ? (bal!.data as { balance: { usage: string; value: number }[] }).balance : null;
-  const tier = (model ?? "").match(/(Max|Pro|Ultra|Lite)$/i)?.[1]?.toLowerCase() ?? "";
-  const mine = allRows?.find((b) => (b.usage.match(/(Max|Pro|Ultra|Lite)$/i)?.[1]?.toLowerCase() ?? "") === tier) ?? null;
-  const balRows = mine ? [{ usage: "Текущая модель", value: mine.value }] : null;
 
   return (
     <div ref={ref} className="relative">
@@ -82,24 +72,6 @@ export function LlmUsage({ mode, model, tick }: { mode: LlmMode; model: string |
               Последний: {u.last.purpose}, {n(u.last.total)} ток.
             </p>
           )}
-          <div className="mt-3 border-t border-line pt-2">
-            <p className="mb-1 font-medium">Остаток</p>
-            {balRows ? (
-              <dl className="num grid grid-cols-[1fr_auto] gap-x-4 gap-y-0.5 text-[12.5px]">
-                {balRows.map((b) => (
-                  <div key={b.usage} className="contents">
-                    <dt className="text-muted-foreground">{b.usage}</dt>
-                    <dd>{n(b.value)}</dd>
-                  </div>
-                ))}
-              </dl>
-            ) : (
-              <p className="text-[12px] text-muted-foreground">
-                {loading ? "Загружаю…" : bal?.ok === false ? `Остаток не получен (${bal.error}). Он виден в личном кабинете провайдера.` : "Нет данных."}
-              </p>
-            )}
-          </div>
-          <p className="mt-2 text-[11.5px] text-muted-foreground">Счётчик с запуска pnpm dev. Журнал запросов: logs/gigachat-usage.jsonl</p>
         </div>
       )}
     </div>

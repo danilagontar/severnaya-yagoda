@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BadgeCheck, Check, ChevronDown, Download, Send } from "lucide-react";
+import { BadgeCheck, Check, ChevronDown, Download, Landmark, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { INVOICES, cn, plural } from "@/lib/utils";
 import type { Result } from "@/core/types";
@@ -67,6 +67,7 @@ export function Registry({
   snapshot,
   onSubmit,
   onApprove,
+  onPay,
 }: {
   results: Result[];
   statuses: Map<string, DocStatus>;
@@ -75,6 +76,7 @@ export function Registry({
   snapshot: string;
   onSubmit: () => void;
   onApprove: () => void;
+  onPay: () => void; // казначей оплатил (симуляция выписки)
 }) {
   const [msg, setMsg] = useState<string | null>(null);
   // свёрнутые группы «Не включено»: запоминаются между перезагрузками
@@ -175,6 +177,11 @@ export function Registry({
                   </>
                 )}
                 {registry.changedAfterSubmit && <p className="mt-0.5 text-[12.5px] text-ask">Реестр изменился после передачи ФД. Передайте заново.</p>}
+                {registry.lastPaid && (
+                  <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+                    Прошлый реестр оплачен {fmtAt(registry.lastPaid.at)}: {registry.lastPaid.count} {plural(registry.lastPaid.count, INVOICES)} на {fmtRub(registry.lastPaid.total)}, счета в архиве.
+                  </p>
+                )}
               </>
             )}
             {status === "submitted" && (
@@ -204,6 +211,12 @@ export function Registry({
             <Button size="sm" onClick={onApprove}>
               <BadgeCheck />
               Утвердить (за ФД)
+            </Button>
+          )}
+          {status === "approved" && (
+            <Button size="sm" onClick={onPay} title="По П-9 платёж создаёт бухгалтер после утверждения реестра ФД">
+              <Landmark />
+              Платежи созданы
             </Button>
           )}
         </div>

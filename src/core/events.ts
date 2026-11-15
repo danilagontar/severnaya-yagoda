@@ -12,13 +12,29 @@ import type { CaseData, CrossField, FieldSource, Letter, Result, Verdict } from 
 
 export type Decision =
   | { kind: "confirm"; amount: number } // оплатить по сверке; amount: сумма на момент подтверждения
-  | { kind: "waiting"; who: string } // вопрос отправлен, ждём ответа
+  | { kind: "waiting"; who: string | string[] } // вопрос отправлен этим адресатам, ждём ответа (строка: записи до 16.11.2026)
   | { kind: "pay-override"; amount: number; reason: string } // оплатить по решению бухгалтера (правилами не решается)
   | { kind: "returned" } // счёт возвращён поставщику на исправление
   | { kind: "reject"; reason: string } // не платить
-  | { kind: "escalated" }; // стоп передан ФД и закупщику
+  | { kind: "escalated"; who?: string[] }; // стоп передан этим адресатам (П-2: закупщику и ФД); без who: записи до 16.11.2026, переданы все
 
 export type DecisionKind = Decision["kind"];
+
+/** Кому отправлен вопрос или передан стоп. */
+export function sentTo(d: Decision | null): string[] {
+  if (!d || (d.kind !== "waiting" && d.kind !== "escalated")) return [];
+  const w = d.who;
+  if (w === undefined) return [];
+  return Array.isArray(w) ? w : w.split(/,\s*/).filter(Boolean);
+}
+
+/** Сколько полных дней ждём ответа: от отметки «вопрос отправлен» до сейчас. */
+export function waitingDays(at: string | null, now: Date = new Date()): number {
+  if (!at) return 0;
+  return Math.max(0, Math.floor((now.getTime() - new Date(at).getTime()) / 86_400_000));
+}
+/** Дольше этого ответа ждать не принято: в очереди и карточке подсвечиваем. */
+export const WAIT_LIMIT_DAYS = 3;
 
 type EventBody =
   | { type: "letter"; letter: Letter } // почта
@@ -29,7 +45,8 @@ type EventBody =
   // бухгалтер: подтвердил значение от ИИ, выбрал между разборами или ввёл своё; source null: снять подтверждение
   | { type: "field-confirmed"; doc: string; field: CrossField["key"]; value: string; source: FieldSource | null }
   | { type: "registry-submitted"; ids: string[]; total: number } // бухгалтер: реестр передан ФД
-  | { type: "registry-approved" }; // ФД: реестр утверждён
+  | { type: "registry-approved" } // ФД: реестр утверждён
+  | { type: "registry-paid"; items: { id: string; amount: number }[]; total: number }; // бухгалтер создал платежи по утверждённому реестру (П-9)
 
 export type AppEvent = EventBody & { id: string; at: string /* ISO-время */ };
 export type EventType = AppEvent["type"];
@@ -43,6 +60,7 @@ export const EVENT_SOURCE: Record<EventType, string> = {
   "field-confirmed": "бухгалтер",
   "registry-submitted": "бухгалтер",
   "registry-approved": "финансовый директор",
+  "registry-paid": "бухгалтер", // П-9: платёж создаёт бухгалтер после утверждения реестра ФД
 };
 
 let seq = 0;
@@ -83,10 +101,12 @@ export function applyData(base: CaseData, events: AppEvent[]): { data: CaseData;
 /** На каких вердиктах решение имеет смысл. Если вердикт сменился (пришло письмо, приёмка, подпись), решение снимается. */
 const ALLOWED: Record<DecisionKind, Verdict[]> = {
   confirm: ["pay"],
-  waiting: ["ask", "return", "stop"],
-  "pay-override": ["ask", "return"], // «стоп» вручную не оплачивается
+  // вопрос имеет смысл, только если ответ меняет этот счёт: согласование, приёмка, условия договора.
+  // У «вернуть» ответ один (исправленный счёт), у «стопа» передача по П-2.
+  waiting: ["ask"],
+  "pay-override": ["ask"], // счёт с ошибкой в итоге возвращают (П-8), «стоп» вручную не оплачивается
   returned: ["return", "ask"],
-  reject: ["pay", "ask", "return", "stop"],
+  reject: ["pay", "ask", "return"], // при «стопе» бухгалтер не решает сам: по П-2 передаёт закупщику и ФД
   escalated: ["stop"],
 };
 
@@ -96,7 +116,7 @@ export const DECISION_LABEL: Record<DecisionKind, string> = {
   "pay-override": "В реестре по решению бухгалтера",
   returned: "Возвращено поставщику",
   reject: "Не платить",
-  escalated: "Передано ФД и закупщику",
+  escalated: "Передано закупщику и ФД",
 };
 
 export interface DocStatus {
@@ -106,22 +126,58 @@ export interface DocStatus {
   stale: string | null; // почему решение снято
   waiting: boolean;
   resolved: boolean; // решено окончательно (не «ждём ответа»)
+  sent: string[]; // кому отправлен вопрос или передан стоп
+  remaining: string[]; // стоп: кому ещё нужно передать (решение засчитывается, когда передано всем)
+  paid: { at: string; amount: number } | null; // оплачено: бухгалтер создал платёж по утверждённому реестру (П-9)
+  archived: boolean; // в работе больше не нужен: оплачен, отклонён, дубль, письмо к закрытым счетам
   inRegistry: boolean;
   amount: number; // сумма в реестре
 }
 
 const EPS = 0.005;
-const EMPTY: DocStatus = { decision: null, at: null, valid: false, stale: null, waiting: false, resolved: false, inRegistry: false, amount: 0 };
+const EMPTY: DocStatus = { decision: null, at: null, valid: false, stale: null, waiting: false, resolved: false, inRegistry: false, amount: 0, sent: [], remaining: [], paid: null, archived: false };
 
 /** Проверка решения перед записью: возвращает текст ошибки или null. */
+/**
+ * Что бухгалтер может решить по «вопросу», исходя из правил, по которым счёт задержан:
+ * - П-2 (письмо о новых реквизитах): решают закупщик и ФД, бухгалтер только передаёт вопрос;
+ * - П-5 (счёт больше принятого, условия договора неизвестны): «без них не готовит ни отказ, ни оплату».
+ *   Оплатить можно по решению, когда закупщик сообщил условия договора (например, предоплату); отказывать нельзя;
+ * - П-6 (цена или количество без подписанного согласования), П-3, П-1, разбор письма: вручную оплатить нельзя,
+ *   ждём подписи в Directum RX, исправленный счёт или подтверждение поля; отказ возможен с причиной.
+ */
+export function askOptions(r: Result): { override: boolean; reject: boolean } {
+  if (r.verdict !== "ask") return { override: false, reject: r.verdict === "pay" || r.verdict === "return" };
+  const asks = r.findings.filter((f) => f.level === "ask");
+  const rules = new Set(asks.map((f) => f.rule));
+  if (rules.has("П-2")) return { override: false, reject: false };
+  // исправленный счёт к оплаченной версии: доплатить разницу по решению или отказать
+  if (asks.length && asks.every((f) => f.tag === "paid-before")) return { override: (r.due ?? 0) > 0, reject: true };
+  const onlyContract = rules.has("П-5") && [...rules].every((x) => x === "П-5" || x === "П-4" || x === "П-3");
+  if (rules.has("П-5")) return { override: onlyContract, reject: false };
+  return { override: false, reject: true };
+}
+
 export function validateDecision(r: Result, d: Decision): string | null {
   if (!ALLOWED[d.kind].includes(r.verdict)) return "Это решение не подходит к текущему вердикту.";
+  const opt = askOptions(r);
+  if (d.kind === "pay-override" && !opt.override)
+    return r.findings.some((f) => f.level === "ask" && f.rule === "П-2")
+      ? "По П-2 решение по реквизитам за закупщиком и ФД: оплатить вручную нельзя."
+      : "Вручную оплачивают только по условиям договора (П-5). Здесь нужен подписанный документ или исправленный счёт.";
+  if (d.kind === "reject" && !opt.reject)
+    return r.findings.some((f) => f.level === "ask" && f.rule === "П-2")
+      ? "По П-2 решение по реквизитам за закупщиком и ФД."
+      : "По П-5 без условий договора бухгалтер не готовит ни отказ, ни оплату. Сначала узнайте условия у закупщика.";
   if (d.kind === "pay-override") {
     if (!(d.amount > 0)) return "Укажите сумму больше нуля.";
     if (r.invoiced !== null && d.amount > r.invoiced + EPS) return `Сумма не может быть больше суммы счёта (${r.invoiced.toLocaleString("ru-RU")} ₽).`;
+    if (r.findings.some((f) => f.tag === "paid-before") && d.amount > (r.due ?? 0) + EPS)
+      return `Прежняя версия уже оплачена: доплатить можно не больше разницы (${(r.due ?? 0).toLocaleString("ru-RU")} ₽).`;
     if (!d.reason.trim()) return "Укажите причину: на чём основано решение.";
   }
-  if (d.kind === "reject" && r.verdict === "pay" && !d.reason.trim()) return "Сверка пройдена. Укажите, почему не платить.";
+  // отказ без причины финансовый директор и аудит не поймут
+  if (d.kind === "reject" && !d.reason.trim()) return "Укажите, почему не платить.";
   return null;
 }
 
@@ -145,7 +201,13 @@ export function applyDecisions(results: Result[], events: AppEvent[]): Map<strin
     else if (d.kind === "confirm" && Math.abs(r.payNow - d.amount) > EPS)
       stale = `Сумма к оплате изменилась: было ${d.amount.toLocaleString("ru-RU")} ₽, стало ${r.payNow.toLocaleString("ru-RU")} ₽. Подтвердите заново.`;
     else if (d.kind === "pay-override" && r.invoiced !== null && d.amount > r.invoiced + EPS) stale = "Сумма решения больше суммы счёта, решение снято.";
-    const valid = !stale;
+    // решение, которое правила для этой причины не допускают (например, ручная оплата цены без подписанного согласования)
+    else if ((d.kind === "pay-override" && !askOptions(r).override) || (d.kind === "reject" && !askOptions(r).reject))
+      stale = "По правилам для этой причины такое решение не принимается, решение снято.";
+    const sent = sentTo(d);
+    // стоп засчитывается, когда передано всем адресатам из «Кому написать» (П-2: закупщику и ФД)
+    const remaining = d.kind === "escalated" && d.who ? [...new Set(r.addressees.map((a) => a.name))].filter((n) => !sent.includes(n)) : [];
+    const valid = !stale && !remaining.length;
     const inRegistry = valid && (d.kind === "confirm" || d.kind === "pay-override");
     out.set(r.id, {
       decision: d,
@@ -156,7 +218,30 @@ export function applyDecisions(results: Result[], events: AppEvent[]): Map<strin
       resolved: valid && d.kind !== "waiting",
       inRegistry,
       amount: inRegistry ? (d.kind === "confirm" ? r.payNow : d.amount) : 0,
+      sent,
+      remaining,
+      paid: null,
+      archived: false,
     });
+  }
+  // оплаченное: деньги ушли, решение больше не пересматривается и в реестре его нет
+  for (const e of events) {
+    if (e.type !== "registry-paid") continue;
+    for (const it of e.items) {
+      const st = out.get(it.id);
+      if (st) out.set(it.id, { ...st, valid: true, stale: null, waiting: false, resolved: true, inRegistry: false, amount: it.amount, paid: { at: e.at, amount: it.amount } });
+    }
+  }
+  // архив: оплачено, «не платить», дубли и заменённые версии; письма: когда закрыты все счета, к которым они относятся
+  for (const r of results) {
+    const st = out.get(r.id)!;
+    const archived = !!st.paid || r.verdict === "duplicate" || (st.valid && st.decision?.kind === "reject");
+    if (archived) out.set(r.id, { ...st, archived });
+  }
+  for (const r of results) {
+    if (r.verdict !== "letter") continue;
+    const st = out.get(r.id)!;
+    if (r.related.every((id) => out.get(id)?.archived)) out.set(r.id, { ...st, archived: true });
   }
   return out;
 }
@@ -181,28 +266,36 @@ export interface RegistryState {
   submittedAt: string | null;
   approvedAt: string | null;
   changedAfterSubmit: boolean; // реестр передавали, но потом он изменился
+  lastPaid: { at: string; total: number; count: number } | null; // последний реестр, оплаченный казначеем
 }
 
 export function registryState(results: Result[], statuses: Map<string, DocStatus>, events: AppEvent[]): RegistryState {
   const items: RegistryItem[] = [];
   for (const r of results) {
     const s = statuses.get(r.id);
-    if (!s?.inRegistry || !s.decision) continue;
+    if (!s?.inRegistry || !s.decision || s.paid) continue;
     items.push({ r, amount: s.amount, basis: s.decision.kind === "confirm" ? "сверка" : "решение бухгалтера", reason: s.decision.kind === "pay-override" ? s.decision.reason : null });
   }
   const total = round2(items.reduce((x, i) => x + i.amount, 0));
-  const pay = results.filter((r) => r.verdict === "pay");
+  const pay = results.filter((r) => r.verdict === "pay" && !statuses.get(r.id)?.paid);
   const proposed = { count: pay.length, total: round2(pay.reduce((x, r) => x + r.payNow, 0)) };
   const unconfirmed = pay.filter((r) => !statuses.get(r.id)?.valid);
 
   // Передача действует, пока реестр тот же: те же документы и та же сумма.
   let submitted: Extract<AppEvent, { type: "registry-submitted" }> | null = null;
   let approvedAt: string | null = null;
+  let lastPaid: RegistryState["lastPaid"] = null;
   for (const e of events) {
     if (e.type === "registry-submitted") {
       submitted = e;
       approvedAt = null;
     } else if (e.type === "registry-approved" && submitted) approvedAt = e.at;
+    else if (e.type === "registry-paid") {
+      // реестр оплачен: цикл закрыт, следующий реестр собирается заново
+      lastPaid = { at: e.at, total: e.total, count: e.items.length };
+      submitted = null;
+      approvedAt = null;
+    }
   }
   const same = !!submitted && Math.abs(submitted.total - total) < EPS && submitted.ids.length === items.length && submitted.ids.every((id) => items.some((i) => i.r.id === id));
   return {
@@ -214,6 +307,7 @@ export function registryState(results: Result[], statuses: Map<string, DocStatus
     submittedAt: same ? submitted!.at : null,
     approvedAt: same ? approvedAt : null,
     changedAfterSubmit: !!submitted && !same,
+    lastPaid,
   };
 }
 
@@ -246,7 +340,10 @@ export function fieldConfirmations(events: AppEvent[]): Map<string, FieldConfirm
 
 export function computeState(base: CaseData, events: AppEvent[], extractor?: Extractor): PilotState {
   const { data, letters, newIds } = applyData(base, events);
-  const results = reconcileAll(data, letters, extractor, newIds, fieldConfirmations(events));
+  // оплаченные документы: исправленная версия к ним не оплачивается второй раз
+  const paid = new Map<string, number>();
+  for (const e of events) if (e.type === "registry-paid") for (const it of e.items) paid.set(it.id, it.amount);
+  const results = reconcileAll(data, letters, extractor, newIds, fieldConfirmations(events), paid);
   const statuses = applyDecisions(results, events);
   return { data, results, statuses, registry: registryState(results, statuses, events) };
 }
@@ -298,7 +395,13 @@ export function orderTimeline(base: CaseData, events: AppEvent[], results: Resul
       out.push({ key: e.id, when: atLabel(e.at), text: `Приёмка +${e.qty.toLocaleString("ru-RU")} ${o.unit}`, source: "1С:ERP", simulated: true });
     else if (e.type === "approval-signed" && base.approvals.some((a) => a.id === e.approval && a.order === orderId))
       out.push({ key: e.id, when: atLabel(e.at), text: `${e.approval} подписано`, source: "Directum RX", simulated: true });
-    else if (e.type === "field-confirmed") {
+    else if (e.type === "registry-paid") {
+      for (const it of e.items) {
+        const r = results.find((x) => x.id === it.id);
+        if (r?.orderId === orderId)
+          out.push({ key: e.id + it.id, when: atLabel(e.at), text: `${r.id}: оплачено ${it.amount.toLocaleString("ru-RU")} ₽`, source: "бухгалтер", docId: r.id, simulated: true });
+      }
+    } else if (e.type === "field-confirmed") {
       const r = results.find((x) => x.id === e.doc);
       if (r?.orderId === orderId) {
         const how = !e.source ? "подтверждение снято" : e.source === "edited" ? `${e.value}, введено вручную` : e.source === "ai" ? `${e.value}, значение ИИ подтверждено` : `${e.value}, выбрано значение правил`;
@@ -381,6 +484,8 @@ export function describeEvent(e: AppEvent): string {
       return e.source ? `${e.doc}: ${FIELD_NAME[e.field]} ${e.value} ${e.source === "edited" ? "введено вручную" : "подтверждено"}` : `${e.doc}: подтверждение поля «${FIELD_NAME[e.field]}» снято`;
     case "registry-submitted":
       return "реестр передан ФД";
+    case "registry-paid":
+      return `реестр оплачен: ${e.items.length} сч. на ${e.total.toLocaleString("ru-RU")} ₽`;
     case "registry-approved":
       return "реестр утверждён ФД";
   }
