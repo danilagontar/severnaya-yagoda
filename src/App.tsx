@@ -18,6 +18,7 @@ import { NewLetter } from "@/components/NewLetter";
 import { LlmUsage } from "@/components/LlmUsage";
 import { VERDICT, fmtRub } from "@/components/verdict";
 import { Sep } from "@/components/sep";
+import { Today } from "@/components/Today";
 
 const data = rawData as CaseData;
 // Срез данных кейса: всё, что происходит в пилоте (письма, приёмка, решения), идёт после него.
@@ -95,12 +96,7 @@ export default function App() {
   const current = results.find((r) => r.id === selected) ?? null;
   const nextId = `Н-${String(extra.length + 1).padStart(2, "0")}`;
 
-  useEffect(() => {
-    if (!selected && results.length) {
-      const first = results.find((r) => r.verdict === "stop") ?? results[0];
-      setSelected(first.id);
-    }
-  }, [results, selected]);
+  // при входе документ не открыт: справа «план на сегодня» (Today), с него бухгалтер начинает день
 
   // Прокрутка: у каждой вкладки своя позиция. Первый заход: сверху, потом: где остановились.
   // На компьютере прокручивается <main>, на узком экране: вся страница.
@@ -358,13 +354,23 @@ export default function App() {
     <div className="flex min-h-full flex-col md:h-full">
       {/* Рейка */}
       <header className="flex min-h-14 shrink-0 flex-wrap items-center gap-x-6 gap-y-1 bg-rail px-5 py-2 text-rail-fg md:h-14 md:flex-nowrap md:py-0">
-        <div className="flex items-center gap-2.5">
+        {/* логотип возвращает к плану на сегодня */}
+        <button
+          onClick={() => {
+            if (selected) markSeen(selected);
+            setSelected(null);
+            setView("queue");
+            setMobileQueue(false);
+          }}
+          className="flex items-center gap-2.5 rounded-md text-left"
+          aria-label="План на сегодня"
+        >
           <img src="/favicon.svg" alt="" className="size-7" />
           <div className="leading-tight">
             <p className="text-[14px] font-semibold">Северная ягода</p>
             <p className="hidden text-[11.5px] text-rail-muted sm:block">Проверка счетов поставщиков</p>
           </div>
-        </div>
+        </button>
         <nav aria-label="Разделы" className="order-last flex h-10 w-full items-stretch overflow-x-auto md:order-none md:h-full md:w-auto md:overflow-visible">
           {NAV.map((n) => (
             <button
@@ -470,6 +476,20 @@ export default function App() {
                 </span>
               )}
             </div>
+          )}
+          {view === "queue" && !current && (
+            <Today
+              results={results}
+              statuses={statuses}
+              registry={registry}
+              snapshot={data.meta.snapshot}
+              newCount={results.filter((r) => r.isNew && !seen.has(r.id)).length}
+              onOpen={(id) => {
+                select(id);
+                setMobileQueue(false);
+              }}
+              onRegistry={() => setView("registry")}
+            />
           )}
           {view === "queue" && current && (
             <DocCard
