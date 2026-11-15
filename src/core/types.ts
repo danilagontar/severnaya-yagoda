@@ -179,6 +179,7 @@ export interface Result {
   payNow: number; // сумма в реестр сейчас
   verdict: Verdict;
   headline: string; // одна фраза причины
+  brief: string; // причина в несколько слов для строки очереди
   findings: Finding[];
   addressees: Addressee[];
   related: string[];

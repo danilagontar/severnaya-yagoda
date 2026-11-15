@@ -57,6 +57,10 @@ export default function App() {
     return { ...DEFAULT_FILTER, sort: v.sort ?? DEFAULT_FILTER.sort, dirs: { ...DEFAULT_FILTER.dirs, ...(v.dirs ?? {}) }, hideDone: v.hideDone ?? false };
   });
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(load<string[]>("sy.collapsed", ["none"])));
+  // открытые бухгалтером документы: пометка «новое» с них снимается
+  const [seen, setSeen] = useState<Set<string>>(() => new Set(load<string[]>("sy.seen", [])));
+  const markSeen = (id: string) => setSeen((s) => (s.has(id) ? s : new Set([...s, id])));
+  useEffect(() => save("sy.seen", [...seen]), [seen]);
   const [dark, setDark] = useState<boolean>(() => load("sy.dark", false));
   const [llm, setLlm] = useState<{ mode: LlmMode; model: string | null }>({ mode: "rules", model: null });
   // баннер после события: что произошло и у каких документов сменился вердикт
@@ -125,6 +129,7 @@ export default function App() {
   }, [view]);
 
   const select = (id: string) => {
+    if (selected && selected !== id) markSeen(selected); // «новое» снимается, когда уходят к другому документу
     setSelected(id);
     scrollPos.current.queue = 0; // новый документ открывается сверху
     if (view === "queue") writeScroll(0);
@@ -143,7 +148,7 @@ export default function App() {
       setTick((t) => t + 1);
     }
     apply([...events, makeEvent({ type: "letter", letter }, at)], { label: `Пришло письмо ${id}`, ex: (t, s) => cache[s + "\n" + t] ?? extractByRules(t, s) });
-    setSelected(id);
+    setSelected(id); // открылось само: «новое» остаётся, пока бухгалтер не нажмёт на него или не уйдёт к другому документу
     setView("queue");
   };
 
@@ -153,6 +158,7 @@ export default function App() {
     // номера Н-01… выдаются заново: черновики убранных писем не должны достаться новым
     const removedIds = new Set(extra.map((l) => l.id));
     forgetDrafts((id) => removedIds.has(id));
+    setSeen((s) => new Set([...s].filter((id) => !removedIds.has(id))));
     // убираем только письма; решения по ним без документа ни на что не влияют
     apply(events.filter((e) => e.type !== "letter"), { label: "Новые письма убраны из очереди" });
     setSelected(null);
@@ -201,6 +207,7 @@ export default function App() {
   };
   const resetAll = () => {
     forgetDrafts((id) => id.startsWith("Н-"));
+    setSeen(new Set());
     apply([], { label: "Демо сброшено: исходные 25 документов" });
     setSelected(null);
   };
@@ -227,6 +234,7 @@ export default function App() {
           setMobileQueue(false);
         }}
         statuses={statuses}
+        seen={seen}
         filter={filter}
         setFilter={setFilter}
         collapsed={collapsed}
@@ -354,7 +362,7 @@ export default function App() {
       </section>
 
       <div className="flex flex-1 md:min-h-0">
-        <aside className="hidden w-[360px] shrink-0 flex-col border-r border-line bg-surface-2 md:flex">{queuePanel}</aside>
+        <aside className="my-3 ml-3 hidden w-[360px] shrink-0 flex-col overflow-hidden rounded-xl border border-line bg-surface-2 md:flex">{queuePanel}</aside>
 
         {/* Узкий экран: та же очередь (поиск, фильтры, группы) на весь экран */}
         {mobileQueue && (
@@ -371,7 +379,7 @@ export default function App() {
 
         <main ref={mainRef} className="min-w-0 flex-1 md:overflow-y-auto">
           {changes && (
-            <div role="status" className="sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line bg-hl px-5 py-2 text-[13px] text-ink">
+            <div role="status" className="sticky top-3 z-20 mx-3 mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-line bg-hl px-4 py-2 text-[13px] text-ink">
               <span className="font-medium">{changes.label}.</span>
               {changes.items.length === 0 ? (
                 <span className="text-muted-foreground">Вердикты документов не изменились.</span>

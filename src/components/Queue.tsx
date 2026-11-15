@@ -106,6 +106,7 @@ export function Queue({
   selected,
   onSelect,
   statuses,
+  seen,
   filter,
   setFilter,
   collapsed,
@@ -115,20 +116,44 @@ export function Queue({
   selected: string | null;
   onSelect: (id: string) => void;
   statuses: Map<string, DocStatus>;
+  seen: Set<string>;
   filter: QueueFilter;
   setFilter: (f: QueueFilter) => void;
   collapsed: Set<string>;
   toggleGroup: (id: string) => void;
 }) {
+  const isNew = (r: Result) => r.isNew && !seen.has(r.id); // открытый документ больше не новый
+  const navRef = useRef<HTMLElement>(null);
+  const [opened, setOpened] = useState<string | null>(null);
+  const [flash, setFlash] = useState<string | null>(null); // группа, раскрытая только что: её строки анимируются
+  useEffect(() => {
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 400);
+    return () => clearTimeout(t);
+  }, [flash]);
+  // раскрытая внизу группа: прокручиваем, чтобы появившиеся счета были видны, а заголовок группы не уезжал вверх
+  useEffect(() => {
+    if (!opened) return;
+    const nav = navRef.current;
+    const sec = nav?.querySelector<HTMLElement>(`[data-group="${opened}"]`);
+    if (nav && sec) {
+      const n = nav.getBoundingClientRect();
+      const s = sec.getBoundingClientRect();
+      const need = Math.min(s.bottom - n.bottom + 8, s.top - n.top);
+      if (need > 0) nav.scrollBy({ top: need, behavior: "smooth" });
+    }
+    setOpened(null);
+  }, [opened]);
   const q = filter.q.trim().toLowerCase();
   // поиск по сумме: «40000», «40 000», «40 000 ₽»
   const qNum = /^\d[\d\s\u00a0]*([.,]\d+)?\s*₽?$/.test(q) ? Number(q.replace(/[\s\u00a0₽]/g, "").replace(",", ".")) : null;
   const amountHit = (r: Result) => qNum !== null && qNum > 0 && [r.invoiced, r.due, r.payNow].some((x) => x !== null && x !== undefined && Math.abs(x - qNum) < 0.005);
+  const byId = new Map(results.map((r) => [r.id, r]));
   const list = results.filter(
     (r) =>
       (!filter.verdicts.length || filter.verdicts.includes(r.verdict)) &&
       (!filter.hideDone || !statuses.get(r.id)?.resolved) &&
-      (!filter.onlyNew || r.isNew) &&
+      (!filter.onlyNew || isNew(r)) &&
       (!filter.to.length || r.addressees.some((a) => filter.to.includes(addresseeKey(a)))) &&
       (!filter.reasons.length || reasonsOf(r).some((x) => filter.reasons.includes(x))) &&
       (!q || amountHit(r) || [r.id, r.supplier, r.ex.senderName, r.ex.invoiceNo, r.orderId].some((x) => x?.toLowerCase().includes(q))),
@@ -143,7 +168,7 @@ export function Queue({
       case "order": // счета одного заказа рядом; без заказа в конце; внутри заказа по дате
         return (a.orderId ?? "ЗП-99").localeCompare(b.orderId ?? "ЗП-99") || receivedKey(a).localeCompare(receivedKey(b));
       default:
-        return RANK[a.verdict] - RANK[b.verdict] || Number(b.isNew) - Number(a.isNew);
+        return RANK[a.verdict] - RANK[b.verdict] || Number(isNew(b)) - Number(isNew(a));
     }
   };
   // счётчики для меню фильтров: по всей очереди
@@ -153,7 +178,7 @@ export function Queue({
     .sort((a, b) => Number(ROLE_ORDER(a[0])) - Number(ROLE_ORDER(b[0])) || b[1] - a[1])
     .map(([id, n]) => ({ id, label: id, count: n }));
   const reasonOptions = REASONS.map((x) => ({ ...x, count: results.filter((r) => reasonsOf(r).includes(x.id)).length }));
-  const newCount = results.filter((r) => r.isNew).length;
+  const newCount = results.filter(isNew).length;
   const verdictGroup = filter.verdicts.length ? GROUPS.find((g) => g.verdicts.length === filter.verdicts.length && g.verdicts.every((v) => filter.verdicts.includes(v))) : undefined;
   const anyFilter = filter.to.length || filter.reasons.length || filter.onlyNew || filter.verdicts.length || filter.q;
 
@@ -213,7 +238,7 @@ export function Queue({
         </div>
       </div>
 
-      <nav aria-label="Очередь документов" className="min-h-0 flex-1 overflow-y-auto">
+      <nav ref={navRef} aria-label="Очередь документов" className="min-h-0 flex-1 overflow-y-auto">
         {GROUPS.map((g) => {
           const st = (r: Result) => statuses.get(r.id) ?? NO;
           const items = list.filter((r) => g.match(r, st(r))).sort(cmp);
@@ -222,13 +247,19 @@ export function Queue({
           // «Решено»: сумма в реестре; «К оплате»: по сверке; остальное: по счёту
           const sum = items.reduce((s, r) => s + (g.id === "resolved" ? st(r).amount : r.verdict === "pay" ? r.payNow : r.ex.kind === "letter" ? 0 : r.invoiced ?? 0), 0);
           return (
-            <section key={g.id}>
+            <section key={g.id} data-group={g.id}>
               <h2
                 className="sticky top-0 z-10 border-b border-[color-mix(in_srgb,var(--g)_28%,var(--border))] bg-[color-mix(in_srgb,var(--g)_12%,var(--surface-2))]"
                 style={{ ["--g" as string]: GROUP_STYLE[g.id].color }}
               >
                 <button
-                  onClick={() => toggleGroup(g.id)}
+                  onClick={() => {
+                    if (isCollapsed) {
+                      setOpened(g.id);
+                      setFlash(g.id);
+                    }
+                    toggleGroup(g.id);
+                  }}
                   aria-expanded={!isCollapsed}
                   className="flex w-full items-center gap-2 px-4 py-2 text-left text-[13px] font-semibold text-ink"
                 >
@@ -243,10 +274,16 @@ export function Queue({
                 </button>
               </h2>
               {!isCollapsed && (
-                <ul className="border-b border-line">
+                <ul className={cn("border-b border-line", flash === g.id && "anim-list")}>
                   {items.map((r) => {
                     const amount = r.verdict === "pay" ? r.payNow : r.invoiced;
+                    // к оплате по сверке, если она меньше счёта; у стопа и дубля платить нечего, у письма суммы нет
+                    const showDue = (r.verdict === "ask" || r.verdict === "return") && r.due !== null && r.due !== undefined && r.invoiced !== null && Math.abs(r.due - r.invoiced) > 0.005;
                     const isSel = r.id === selected;
+                    // сверка пройдена, но платёж задержан из-за реквизитов (как в итогах)
+                    const held = r.verdict === "ask" && r.findings.some((f) => f.rule === "П-2");
+                    // у письма: номер связанного счёта
+                    const letterTo = r.ex.kind === "letter" ? r.related.map((id) => byId.get(id)?.ex.invoiceNo).find(Boolean) : undefined;
                     return (
                       <li key={r.id}>
                         <button
@@ -257,29 +294,53 @@ export function Queue({
                             isSel ? "bg-surface ring-1 ring-line-strong ring-inset" : "hover:bg-surface/70",
                           )}
                         >
-                          <span className="mt-[1px] grid size-[18px] place-items-center" title={VERDICT[r.verdict].label}>
+                          <span className="row-span-3 mt-[1px] grid size-[18px] place-items-center" title={VERDICT[r.verdict].label}>
                             <VerdictIcon v={r.verdict} className="size-4" />
                           </span>
-                          <span className="min-w-0">
-                            <span className="flex items-baseline gap-2">
-                              <span className="num text-[12px] font-semibold text-muted-foreground">{r.id}</span>
-                              <span className="truncate font-medium text-ink">{r.supplier ?? r.ex.senderName ?? "Отправитель не указан"}</span>
-                              {r.isNew && <span className="rounded-[3px] bg-cta px-1 text-[10px] font-semibold uppercase leading-4 text-white">новое</span>}
+                          {/* 1: счёт и заказ, по ним бухгалтер ищет документ; у письма: к какому счёту */}
+                          <span className="num flex min-w-0 items-baseline gap-2 text-[14px] font-semibold text-ink">
+                            <span className="truncate">
+                              {r.ex.kind === "letter" ? (
+                                <>Письмо{letterTo && <><Sep />к счёту {letterTo}</>}</>
+                              ) : r.ex.invoiceNo || r.orderId ? (
+                                <>
+                                  {r.ex.invoiceNo && <>Счёт {r.ex.invoiceNo}</>}
+                                  {r.ex.invoiceNo && r.orderId && <Sep />}
+                                  {r.orderId}
+                                </>
+                              ) : (
+                                "Счёт без номера"
+                              )}
                             </span>
-                            <span className="mt-0.5 line-clamp-2 text-[12.5px] leading-snug text-muted-foreground">{r.headline}</span>
+                            {isNew(r) && <span className="shrink-0 self-center rounded-[3px] bg-cta px-1 text-[10px] font-semibold uppercase leading-4 text-white">новое</span>}
                           </span>
-                          <span className="flex flex-col items-end gap-1 pl-1">
-                            <span className={cn("num text-[13px] font-medium whitespace-nowrap", r.verdict === "duplicate" ? "text-muted-foreground line-through decoration-1" : "text-ink")}>
-                              {amount !== null && amount !== undefined && r.ex.kind !== "letter" ? fmtRub(amount) : ""}
-                            </span>
-                            {st(r).valid && st(r).decision && (
-                              <span className={cn("inline-flex items-center gap-0.5 text-right text-[11px] leading-tight", st(r).inRegistry ? "text-pay" : "text-muted-foreground")}>
+                          <span className={cn("num pl-1 text-right text-[14px] font-semibold whitespace-nowrap", r.verdict === "duplicate" ? "text-muted-foreground line-through decoration-1" : r.verdict === "stop" ? "text-muted-foreground" : "text-ink")}>
+                            {amount !== null && amount !== undefined && r.ex.kind !== "letter" ? fmtRub(amount) : ""}
+                          </span>
+                          {/* 2: номер документа и поставщик; справа короткий итог по деньгам или решение */}
+                          <span className="min-w-0 truncate text-[12.5px] text-muted-foreground">
+                            <span className="num text-[11.5px]">{r.id}</span>
+                            <Sep />
+                            {r.supplier ?? r.ex.senderName ?? "Отправитель не указан"}
+                          </span>
+                          <span className="pl-1 text-right text-[11.5px] whitespace-nowrap">
+                            {st(r).valid && st(r).decision ? (
+                              <span className={cn("inline-flex items-center gap-0.5", st(r).inRegistry ? "text-pay" : "text-muted-foreground")}>
                                 {st(r).inRegistry && <Check className="size-3 shrink-0" strokeWidth={2.5} aria-hidden />}
                                 {DECISION_LABEL[st(r).decision!.kind].toLowerCase()}
                               </span>
-                            )}
-                            {st(r).stale && <span className="text-right text-[11px] leading-tight text-ask">решение снято</span>}
+                            ) : st(r).stale ? (
+                              <span className="text-ask">решение снято</span>
+                            ) : showDue ? (
+                              <span className="num text-ask">к оплате {fmtRub(r.due!)}</span>
+                            ) : r.verdict === "stop" && r.ex.kind !== "letter" ? (
+                              <span className="text-stop">платить нельзя</span>
+                            ) : held ? (
+                              <span className="text-muted-foreground">платёж задержан</span>
+                            ) : null}
                           </span>
+                          {/* 3: причина в несколько слов; полностью в заголовке карточки и во всплывающей подсказке */}
+                          <span className="col-span-2 col-start-2 mt-0.5 truncate text-[12.5px] leading-snug text-ink/85" title={r.headline}>{r.brief}</span>
                         </button>
                       </li>
                     );

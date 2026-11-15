@@ -209,6 +209,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
     payNow: 0,
     verdict: "ask",
     headline: "",
+    brief: "",
     findings: extractionNotes(ex),
     addressees: [],
     related: [],
@@ -271,6 +272,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
       }
       if (ex.requisitesChange)
         r.findings.push({ rule: "П-2", level: "stop", text: "Просят платить по новым реквизитам. Подписанного допсоглашения о смене получателя в Directum RX нет." });
+      r.brief = sup.status === "lookalike" ? "Похожее юрлицо, новые реквизиты" : "Новые реквизиты без допсоглашения";
       r.headline = sup.status === "lookalike" ? "Счёт от другого юрлица с похожим названием и новыми реквизитами: признаки подмены получателя" : "Счёт с новыми реквизитами без допсоглашения";
       if (ex.total) r.prevented.push({ category: "fraud", amount: ex.total });
       addAddr(r, buyerOf(probable, "проверить, кто выставил счёт"));
@@ -303,6 +305,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
       prev.prevented = [];
       prev.deferred = 0;
       prev.headline = `Заменён исправленной версией ${r.id}`;
+      prev.brief = `Заменён версией ${r.id}`;
       prev.findings = [{ rule: "П-3", level: "info", text: `Исправленный счёт ${ex.invoiceNo} (${r.id}) заменяет эту версию.`, source: r.id }];
       prev.addressees = [];
       if (prev.orderId) claims.set(prev.orderId, (claims.get(prev.orderId) ?? []).filter((c) => c.id !== prev.id));
@@ -319,6 +322,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
         const shown = ex.invoiceNo !== prev.ex.invoiceNo ? `«${ex.invoiceNo}» это тот же счёт ${prev.ex.invoiceNo}, номер записан иначе` : `счёт ${ex.invoiceNo} уже получен`;
         r.findings.push({ rule: "П-3", level: "info", text: `Копия: ${shown} (${prev.id}).`, source: prev.id });
         r.headline = `Копия счёта ${prev.ex.invoiceNo} (${prev.id}), не отдельный документ`;
+        r.brief = `Копия ${prev.id}, не платим`;
         const amount = ex.total ?? prev.invoiced ?? 0;
         if (amount) r.prevented.push({ category: "duplicate", amount });
         link(r, prev);
@@ -330,7 +334,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
         r.compare = compareRows(r, o, null, approvals, null);
         continue;
       }
-      r.findings.push({ rule: "П-3", level: "ask", text: "Письмо называет счёт повторным, но исходный счёт в очереди не найден. Проверяем как новый." });
+      r.findings.push({ rule: "П-3", level: "ask", text: "Письмо называет счёт повторным, но исходный счёт в очереди не найден. Проверяем как новый.", short: "повторный, но исходного нет" });
     }
     if (ex.invoiceNo) {
       const sameNoOther = results.filter((x) => x !== r && x.supplier && x.supplier !== sup.name && x.ex.invoiceNo && normInvoiceNo(x.ex.invoiceNo) === normInvoiceNo(ex.invoiceNo!) && x.supplierStatus === "known");
@@ -344,6 +348,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
       r.verdict = "ask";
       r.due = null;
       r.headline = "Поставщика нет в заказах, счёт не к чему привязать";
+      r.brief = "Поставщика нет в заказах";
       r.findings.push({ rule: "П-2", level: "ask", text: `«${sup.name ?? "отправитель не указан"}» не найден среди поставщиков в заказах ERP.` });
       addAddr(r, buyerOf(null, "есть ли заказ у этого поставщика"));
       r.compare = compareRows(r, null, null, approvals, null);
@@ -355,9 +360,9 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
     if (ex.orderNo) {
       order = orders.find((o) => o.id === ex.orderNo) ?? null;
       if (order) r.binding = "number";
-      else r.findings.push({ rule: "П-1", level: "ask", text: `Заказ ${ex.orderNo} не найден в выгрузке ERP.` });
+      else r.findings.push({ rule: "П-1", level: "ask", text: `Заказ ${ex.orderNo} не найден в выгрузке ERP.`, short: `заказ ${ex.orderNo} не найден` });
       if (order && order.supplier !== sup.name) {
-        r.findings.push({ rule: "П-1", level: "ask", text: `${order.id} оформлен на «${order.supplier}», а счёт от «${sup.name}».`, source: order.id });
+        r.findings.push({ rule: "П-1", level: "ask", text: `${order.id} оформлен на «${order.supplier}», а счёт от «${sup.name}».`, short: "заказ на другого поставщика", source: order.id });
         order = null;
         r.binding = "none";
       }
@@ -375,6 +380,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
     if (!order) {
       r.verdict = "ask";
       r.headline = "Не удалось однозначно найти заказ";
+      r.brief = "Заказ не найден";
       r.findings.push({ rule: "П-1", level: "ask", text: `У «${sup.name}» несколько или ни одного подходящего заказа, нужен номер заказа.` });
       addAddr(r, { role: "procurement", name: orders.find((o) => o.supplier === sup.name)?.buyer ?? "Отдел закупок", reason: "уточнить номер заказа" });
       r.compare = compareRows(r, null, null, approvals, null);
@@ -386,13 +392,14 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
     if (mm.level === "synonym")
       r.findings.push({ rule: "П-7", level: "info", text: `«${mm.synonym}» у поставщика = «${order.material}» в ERP.`, source: order.id });
     else if (mm.level === "none" || (mm.level === "partial" && r.binding === "number"))
-      r.findings.push({ rule: "П-7", level: "ask", text: `Материал в счёте («${ex.material ?? "не указан"}») не похож на материал заказа («${order.material}»).`, source: order.id });
+      r.findings.push({ rule: "П-7", level: "ask", text: `Материал в счёте («${ex.material ?? "не указан"}») не похож на материал заказа («${order.material}»).`, short: "материал не как в заказе", source: order.id });
 
     // --- 6. Пересчёт в единицы заказа (П-7)
     const conv = convertQty(ex, order);
     if (!conv) {
       r.verdict = "ask";
       r.headline = "Не удалось пересчитать количество в единицы заказа";
+      r.brief = "Не пересчитать в единицы заказа";
       r.findings.push({ rule: "П-7", level: "ask", text: `Счёт в «${ex.unit ?? "?"}», заказ в «${order.unit}», фасовка в счёте не указана.`, source: order.id });
       addAddr(r, buyerOf(order, "уточнить фасовку"));
       r.compare = compareRows(r, order, null, approvals, null);
@@ -406,7 +413,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
     const calc = round2(ex.qty! * ex.price!);
     if (ex.total !== null && Math.abs(calc - ex.total) > EPS) {
       arithmeticError = true;
-      r.findings.push({ rule: "П-8", level: "return", text: `${num(ex.qty!)} × ${num(ex.price!)} = ${rub(calc)}, а в счёте итог ${rub(ex.total)}.` });
+      r.findings.push({ rule: "П-8", level: "return", text: `${num(ex.qty!)} × ${num(ex.price!)} = ${rub(calc)}, а в счёте итог ${rub(ex.total)}.`, short: `ошибка в итоге на ${rub(round2(Math.abs(ex.total - calc)))}` });
       if (ex.total > calc) r.prevented.push({ category: "arithmetic", amount: round2(ex.total - calc) });
       addAddr(r, { role: "supplier", name: sup.name!, email: ex.senderEmail ?? undefined, reason: "исправить итог счёта" });
     }
@@ -421,9 +428,9 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
     for (const a of ownApprovals.filter((x) => x.newPrice !== null)) {
       const from = parseDate(a.effectiveFrom);
       if (!a.signed) {
-        priceNotes.push({ rule: "П-6", level: "ask", text: `${a.id} (${num(a.newPrice!)} ₽) в статусе «${a.status}». Неподписанное согласование не действует.`, source: a.id });
+        priceNotes.push({ rule: "П-6", level: "ask", text: `${a.id} (${num(a.newPrice!)} ₽) в статусе «${a.status}». Неподписанное согласование не действует.`, short: `цена по неподписанному ${a.id}`, source: a.id });
       } else if (from !== null && acceptDate < from) {
-        priceNotes.push({ rule: "П-6", level: "ask", text: `${a.id}: ${num(a.newPrice!)} ₽ действует только с ${a.effectiveFrom}, а поставка принята ${order.lastAcceptance}, поэтому цена ${num(order.price)} ₽.`, source: a.id });
+        priceNotes.push({ rule: "П-6", level: "ask", text: `${a.id}: ${num(a.newPrice!)} ₽ действует только с ${a.effectiveFrom}, а поставка принята ${order.lastAcceptance}, поэтому цена ${num(order.price)} ₽.`, short: `${a.id} ещё не действовало`, source: a.id });
       } else {
         effPrice = a.newPrice!;
         priceSource = `${a.id}, подписано`;
@@ -434,9 +441,9 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
       const claimDate = parseDate(ex.approvalClaimDate);
       const foreign = claimDate !== null ? approvals.filter((a) => parseDate(a.date) === claimDate && a.order !== order!.id) : [];
       for (const f of foreign)
-        priceNotes.push({ rule: "П-6", level: "ask", text: `Поставщик ссылается на «${ex.approvalClaim}». Это ${f.id}, и оно относится к ${f.order}, а не к ${order.id}.`, source: f.id });
+        priceNotes.push({ rule: "П-6", level: "ask", text: `Поставщик ссылается на «${ex.approvalClaim}». Это ${f.id}, и оно относится к ${f.order}, а не к ${order.id}.`, short: `${f.id} относится к другому заказу`, source: f.id });
       if (!foreign.length && !ownApprovals.some((a) => a.newPrice !== null))
-        priceNotes.push({ rule: "П-6", level: "ask", text: `Поставщик ссылается на «${ex.approvalClaim}», но подписанного согласования цены по ${order.id} нет.` });
+        priceNotes.push({ rule: "П-6", level: "ask", text: `Поставщик ссылается на «${ex.approvalClaim}», но подписанного согласования цены по ${order.id} нет.`, short: "нет подписанного согласования цены" });
     }
     if (conv.price > effPrice + EPS) {
       r.findings.push(...priceNotes);
@@ -524,6 +531,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
       r.verdict = "ask";
       r.payNow = 0;
       r.headline = text;
+      r.brief = "Несколько счетов в одном письме";
       r.duplicateOf = undefined;
       r.prevented = [];
     }
@@ -579,6 +587,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
     if (ex.topic === "requisites") {
       r.verdict = "stop";
       r.headline = `Смена реквизитов письмом без допсоглашения${tIds ? `, к ${tIds}` : ""}`;
+      r.brief = "Смена реквизитов без допсоглашения";
       r.findings.push({ rule: "П-2", level: "stop", text: "Смену получателя или банковских реквизитов оформляют подписанным допсоглашением в Directum RX. Письмо им не является, реквизиты не менять." });
       addAddr(r, buyerOf(order, "подтвердить смену реквизитов"));
       addAddr(r, { role: "cfo", name: CFO, reason: "смена реквизитов (П-2)" });
@@ -589,20 +598,24 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
         if (t.verdict === "pay") {
           t.verdict = "ask";
           t.headline = `Сверка пройдена, но ${r.id} просит сменить реквизиты, платёж задержан`;
+          t.brief = "Сверка пройдена, ждём реквизиты";
         }
         t.payNow = 0;
       }
     } else if (ex.topic === "delivery-promise") {
       r.headline = `Поставщик обещает поставку${tIds ? `, контекст к ${tIds}` : ""}`;
+      r.brief = "Обещание поставки, не приёмка";
       r.findings.push({ rule: "П-4", level: "info", text: "Обещание привезти не является приёмкой: оплату готовят за количество, проведённое на складе." });
       if (/реестр|оплат/i.test(l.text)) r.findings.push({ rule: "П-4", level: "info", text: "Просьбу включить в реестр выполнить нельзя, пока нет приёмки." });
       for (const t of targets) t.findings.push({ rule: "П-4", level: "info", text: `${r.id}: «${ex.promise}», поставка ещё не принята.`, source: r.id });
     } else if (ex.topic === "buyer-note") {
       r.headline = `Комментарий закупщика${tIds ? ` к ${tIds}` : ""}`;
+      r.brief = "Комментарий закупщика";
       r.findings.push({ rule: "П-6", level: "info", text: "Пояснение закупщика учитывается как контекст, согласованием не является." });
       for (const t of targets) t.findings.push({ rule: "П-6", level: "info", text: `${r.id}: закупщик подтверждает: ${l.text.replace(/\s+/g, " ").slice(0, 140)}`, source: r.id });
     } else {
       r.headline = tIds ? `Письмо поставщика, контекст к ${tIds}` : "Письмо без счёта, связанный счёт не найден";
+      r.brief = tIds ? "Письмо поставщика" : "Связанный счёт не найден";
     }
     if (!targets.length && ex.topic !== "other") r.findings.push({ rule: "П-1", level: "info", text: "Связанный счёт в очереди не найден." });
     if (ex.otherInvoices?.length)
@@ -612,6 +625,8 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
 
   // headline для счетов без явной причины
   for (const r of results) if (!r.headline) r.headline = defaultHeadline(r);
+  // короткая причина для строки очереди
+  for (const r of results) if (!r.brief) r.brief = defaultBrief(r);
 
   const order = new Map(letters.map((l, i) => [l.id, i]));
   return results.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
@@ -633,6 +648,25 @@ function finalizeVerdict(r: Result, arithmeticError: boolean) {
   else if (has("ask")) v = "ask";
   r.verdict = v;
   r.payNow = v === "pay" ? r.due ?? 0 : 0;
+}
+
+/** Темы счёта по правилам: одна на правило, сначала уровня вердикта. */
+function topicsOf(r: Result): Finding[] {
+  const byRule = new Map<string, Finding>();
+  for (const f of r.findings) if (f.level !== "info" && f.level !== "ok" && !byRule.has(f.rule)) byRule.set(f.rule, f);
+  return [...byRule.values()].sort((a, b) => Number(b.level === r.verdict) - Number(a.level === r.verdict));
+}
+
+const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
+const themes = (n: number) => (n % 10 === 1 && n % 100 !== 11 ? "тема" : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? "темы" : "тем");
+
+/** Причина для строки очереди в несколько слов: главная тема и сколько ещё. Полностью в заголовке карточки. */
+function defaultBrief(r: Result): string {
+  if (r.verdict === "pay") return "Сверка пройдена";
+  const topics = topicsOf(r);
+  const main = topics[0];
+  if (!main?.short) return r.headline;
+  return cap(main.short) + (topics.length > 1 ? ` и ещё ${topics.length - 1} ${themes(topics.length - 1)}` : "");
 }
 
 /** Заголовок счёта: если причин на разные темы несколько, перечисляет все темы, а подробности остаются в «Почему так». */

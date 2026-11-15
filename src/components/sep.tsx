@@ -1,4 +1,4 @@
-// Разделитель полей в строке: тонкая серая вертикальная черта (вместо «·»).
+// Разделитель полей в строке: тонкая серая вертикальная черта (вместо точки посередине строки).
 export function Sep() {
   return (
     <span aria-hidden className="mx-1.5 select-none font-normal text-muted-foreground/50">

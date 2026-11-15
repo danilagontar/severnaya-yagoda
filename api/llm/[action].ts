@@ -1,5 +1,5 @@
 // Серверная функция Vercel: то же, что прокси в dev-сервере (server/vite-plugin.ts), но для выложенного сайта.
-// /api/llm/status · /api/llm/usage · /api/llm/chat. Ключ берётся из переменных окружения проекта на Vercel.
+// /api/llm/status, /api/llm/usage, /api/llm/chat. Ключ берётся из переменных окружения проекта на Vercel.
 import fs from "node:fs";
 import path from "node:path";
 import { balance, chat, isConfigured, usage, type GigaEnv } from "../../server/gigachat.js"; // ES-модули на Vercel требуют расширение
