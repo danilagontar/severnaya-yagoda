@@ -1,7 +1,7 @@
 import { Link2 } from "lucide-react";
 import type { TimelineItem } from "@/core/events";
 import type { Result } from "@/core/types";
-import { cn } from "@/lib/utils";
+import { HIT, cn } from "@/lib/utils";
 import { VERDICT, VerdictTag } from "./verdict";
 import { Sep } from "@/components/sep";
 
@@ -71,7 +71,7 @@ export function OrderTimeline({
               <span className="min-w-0">
                 <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                   {it.docId && !current ? (
-                    <button onClick={() => onSelect(it.docId!)} className="text-left text-ink underline decoration-line-strong underline-offset-2 hover:decoration-ink">
+                    <button onClick={() => onSelect(it.docId!)} className={cn(HIT, "text-left text-ink underline decoration-line-strong underline-offset-2 hover:decoration-ink")}>
                       {it.text}
                     </button>
                   ) : (

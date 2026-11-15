@@ -149,7 +149,7 @@ export function Registry({
               <Sep />в реестр попадают только счета, подтверждённые бухгалтером
             </p>
           </div>
-          <Button size="sm" variant="outline" onClick={download}>
+          <Button size="sm" variant="outline" onClick={download} disabled={!items.length} title={items.length ? undefined : "В реестре пока нет подтверждённых счетов"}>
             <Download />
             Скачать CSV
           </Button>
@@ -195,7 +195,7 @@ export function Registry({
             )}
           </div>
           {status === "draft" && (
-            <Button size="sm" onClick={() => (items.length ? (onSubmit(), setMsg(null)) : setMsg("В реестре пока нет подтверждённых счетов."))}>
+            <Button size="sm" disabled={!items.length} title={items.length ? undefined : "В реестре пока нет подтверждённых счетов"} onClick={() => (onSubmit(), setMsg(null))}>
               <Send />
               Передать на утверждение ФД
             </Button>

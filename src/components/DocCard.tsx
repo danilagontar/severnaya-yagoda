@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { ArrowRight, Check, Copy, ExternalLink, FileText, Link2, Mail, RotateCcw, Sparkles, TriangleAlert, Info, OctagonX, Undo2 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { HIT, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { buildDraft, roleTitle } from "@/core/drafts";
@@ -356,7 +356,11 @@ export function DocCard({
             <h2 id="cmp-h" className="text-[15px] font-semibold text-ink">
               Сверка
             </h2>
-            <p className="text-[12px] text-muted-foreground">Наведите на ячейку счёта, и в письме подсветится, откуда взято число</p>
+            <p className="text-[12px] text-muted-foreground">
+              {/* на сенсорном экране наведения нет: ячейка подсвечивает письмо по нажатию (фокус), а письмо ниже таблицы */}
+              <span className="pointer-coarse:hidden">Наведите на ячейку счёта, и в письме подсветится, откуда взято число</span>
+              <span className="hidden pointer-coarse:inline">Нажмите на ячейку счёта, и в письме ниже подсветится, откуда взято число</span>
+            </p>
           </div>
           {(() => {
             const showAppr = r.compare.some((x) => x.approval);
@@ -480,7 +484,7 @@ export function DocCard({
                     <span className="text-ink">{f.text}</span>
                     {f.source && (
                       target ? (
-                        <button onClick={() => onSelect(target)} className="ml-1.5 text-[12.5px] text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent">
+                        <button onClick={() => onSelect(target)} className={cn(HIT, "ml-1.5 text-[12.5px] text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent")}>
                           открыть {target}
                         </button>
                       ) : (
@@ -586,6 +590,7 @@ function CrossCheckPanel({ r, llm, onRun }: { r: Result; llm: LlmMode; onRun: (r
         <Button
           size="xs"
           variant="outline"
+          className={HIT}
           disabled={busy}
           onClick={async () => {
             setBusy(true);

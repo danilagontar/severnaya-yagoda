@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, ListFilter, Moon, Sun, X } from "lucide-react";
-import { INVOICES, cn, plural } from "@/lib/utils";
+import { HIT, INVOICES, cn, plural } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import rawData from "@/data/case.json";
 import { extractByRules } from "@/core/extract";
@@ -314,8 +314,9 @@ export default function App() {
       progress: registry.proposed.total ? Math.min(1, registry.total / registry.proposed.total) : 0,
       link: { label: "реестр", onClick: () => setView("registry") },
       detail: `Сверка предлагает к оплате ${num(registry.proposed.total)} ₽. В реестре ${num(registry.total)} ₽ (${registry.items.length} ${plural(registry.items.length, INVOICES)}): туда попадают только счета, подтверждённые бухгалтером.`,
-      delta: delta?.registry,
-      flash: flashDelta?.registry,
+      // цифра разницы стоит у крупной суммы, поэтому считается по ней; плитка подсвечивается и при подтверждении в реестр
+      delta: delta?.proposed,
+      flash: flashDelta?.proposed ?? flashDelta?.registry,
       polarity: 1,
     },
     {
@@ -397,7 +398,8 @@ export default function App() {
       {/* Сетка: у плиток одного ряда общая строка подписей и общая строка сумм: всё на одном уровне, даже если подпись переносится */}
       {/* Итоги: на компьютере четыре плитки, на телефоне главная плитка и список из трёх строк */}
       <section aria-label="Итоги очереди" className="shrink-0 border-b border-line bg-surface">
-        <div className="hidden grid-cols-[1fr_1fr_1.2fr_1fr] md:grid">
+        {/* на планшете 2×2: четыре в ряд там не помещаются и подписи обрезаются */}
+        <div className="hidden md:grid md:grid-cols-2 lg:grid-cols-[1fr_1fr_1.2fr_1fr]">
           {tiles.map((t) => (
             <Stat key={`${t.id}-${flash}`} {...t} />
           ))}
@@ -552,7 +554,7 @@ function DeltaChip({ delta, polarity }: { delta?: number; polarity?: Tile["polar
 
 function TileLink({ link }: { link: NonNullable<Tile["link"]> }) {
   return (
-    <button onClick={link.onClick} className="inline-flex shrink-0 items-center gap-0.5 text-[12px] font-medium text-accent underline decoration-accent/35 underline-offset-[3px] hover:decoration-accent">
+    <button onClick={link.onClick} className={HIT + " inline-flex shrink-0 items-center gap-0.5 text-[12px] font-medium text-accent underline decoration-accent/35 underline-offset-[3px] hover:decoration-accent"}>
       {link.label}
       <ArrowRight className="size-3" aria-hidden />
     </button>
@@ -562,7 +564,7 @@ function TileLink({ link }: { link: NonNullable<Tile["link"]> }) {
 /** Плитка итогов: название и ссылка, значение, разбивка, полоска прогресса. На телефоне главная плитка во всю ширину, разбивка справа от значения. */
 function Stat({ label, hint, value, suffix, sub, progress, detail, tone, link, delta, flash, polarity = 0 }: Tile) {
   return (
-    <div className={cn("flex min-w-0 flex-col border-line px-4 py-2 md:border-r md:last:border-r-0", flashClass(meaning(polarity, flash)))} title={detail}>
+    <div className={cn("flex min-w-0 flex-col border-line px-4 py-2 md:odd:border-r md:[&:nth-child(-n+2)]:border-b lg:border-r lg:last:border-r-0 lg:[&:nth-child(-n+2)]:border-b-0", flashClass(meaning(polarity, flash)))} title={detail}>
       <span className="flex min-w-0 items-baseline justify-between gap-2">
         <span className="truncate text-[12px] leading-tight text-muted-foreground">
           {label}

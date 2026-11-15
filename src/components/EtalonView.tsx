@@ -88,9 +88,10 @@ export function EtalonView({ data, onSelect }: { data: CaseData; onSelect: (id: 
           <table className="w-full table-fixed border-collapse text-[13.5px]">
             <colgroup>
               <col />
-              <col className="w-[120px]" />
-              <col className="w-[120px]" />
-              <col className="w-10" />
+              {/* на телефоне колонки сумм уже, иначе подписям остаётся ~60 px и они переносятся по слову */}
+              <col className="w-[92px] sm:w-[120px]" />
+              <col className="w-[92px] sm:w-[120px]" />
+              <col className="w-8 sm:w-10" />
             </colgroup>
             <thead>
               <tr className="border-b border-line text-left text-[12px] text-muted-foreground">

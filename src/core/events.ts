@@ -292,6 +292,7 @@ export function orderTimeline(base: CaseData, events: AppEvent[], results: Resul
 // ---------- показатели сводки (для плиток и меток разницы) ----------
 
 export interface Metrics {
+  proposed: number; // к оплате по сверке (крупная цифра плитки «К оплате»)
   registry: number; // в реестре
   prevented: number; // не платить
   deferred: number; // отложено
@@ -311,7 +312,7 @@ export function metrics(s: PilotState): Metrics {
     if ((r.verdict === "stop" || r.verdict === "return" || r.verdict === "ask") && !st?.valid) need++;
     if (r.verdict !== "duplicate" && r.verdict !== "letter" && st?.resolved) decided++;
   }
-  return { registry: s.registry.total, prevented: round2(prevented), deferred: round2(deferred), need, decided };
+  return { proposed: s.registry.proposed.total, registry: s.registry.total, prevented: round2(prevented), deferred: round2(deferred), need, decided };
 }
 
 /** Разница показателей: только изменившиеся. */

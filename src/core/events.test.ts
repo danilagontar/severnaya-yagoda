@@ -136,6 +136,7 @@ describe("сценарии для показа", () => {
     const d = metricsDelta(metrics(st([])), metrics(run("acc-zp01")));
     expect(d.deferred).toBeLessThan(0);
     expect(d.need).toBe(-1);
+    expect(d.proposed).toBeGreaterThan(0); // В-07 стал «оплатить»: растёт крупная цифра плитки «К оплате»
   });
 });
 

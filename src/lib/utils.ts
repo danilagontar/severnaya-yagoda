@@ -13,4 +13,7 @@ export function plural(n: number, [one, few, many]: [string, string, string]): s
   if (b >= 2 && b <= 4) return few;
   return many;
 }
+/** Невидимое расширение области нажатия у мелких ссылок-кнопок: до ~40 px по высоте, вид не меняется. */
+export const HIT = "relative after:absolute after:-inset-x-1 after:-inset-y-2.5";
+
 export const INVOICES: [string, string, string] = ["счёт", "счёта", "счетов"];
