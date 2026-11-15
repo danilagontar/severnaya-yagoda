@@ -372,7 +372,9 @@ export function DocCard({
             const cell = (row: CompareRow) => {
               const f = ROW_FIELD[row.key];
               const hasSpan = !!(f && r.ex.spans[f]);
-              const hint = row.key === "supplier" ? undefined : hintFor(r.ex.crossCheck?.fields, row.key === "qty" ? ["qty", "pack"] : [row.key]);
+              const found = row.key === "supplier" ? undefined : hintFor(r.ex.crossCheck?.fields, row.key === "qty" ? ["qty", "pack"] : [row.key]);
+              // подсказка только там, где ядро ждёт решения бухгалтера (у дублей и писем её нет)
+              const hint = found && (found.status === "confirmed" || r.aiPending.includes(found.key)) ? found : undefined;
               const pending = hint && hint.status !== "confirmed";
               return (
                 <div
@@ -645,38 +647,70 @@ function CrossCheckPanel({ r, llm, onRun, onConfirm }: { r: Result; llm: LlmMode
         </p>
         <p className="text-[12px] text-muted-foreground">правила и ИИ читали письмо независимо</p>
       </div>
-      <table className="w-full border-collapse text-[12.5px]">
-        <thead>
-          <tr className="text-left text-[11.5px] text-muted-foreground">
-            <th scope="col" className="px-3 pt-1.5 pb-1 font-medium">Поле</th>
-            <th scope="col" className="px-2 pt-1.5 pb-1 font-medium">Правила</th>
-            <th scope="col" className="px-2 pt-1.5 pb-1 font-medium">ИИ</th>
-            <th scope="col" className="px-3 pt-1.5 pb-1 font-medium"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {cc.fields.map((f) => (
-            <tr key={f.key} className={cn("border-t border-line align-top", f.status === "diff" && "bg-stop/[0.06]")}>
-              <th scope="row" className="px-3 py-1.5 text-left font-normal text-muted-foreground">{f.label}</th>
-              <td className="num px-2 py-1.5 text-ink">{f.rules}</td>
-              <td className="num px-2 py-1.5 text-ink">{f.llm}</td>
-              <td className={cn("px-3 py-1.5 text-right", CROSS[f.status].cls)}>
-                {r.ex.kind === "letter" && f.status === "llm-only" ? (
-                  <span className="whitespace-nowrap text-muted-foreground">в письме без счёта не используется</span>
-                ) : !IN_COMPARE.has(f.key) && (f.status === "llm-only" || (f.status === "diff" && f.critical) || f.status === "confirmed") ? (
-                  <div className="ml-auto max-w-[260px] text-left">
-                    <AiHint f={f} model={cc.model} onConfirm={onConfirm} />
-                  </div>
-                ) : IN_COMPARE.has(f.key) && (f.status === "llm-only" || (f.status === "diff" && f.critical)) ? (
-                  <span className="whitespace-nowrap">{CROSS[f.status].label}, подтвердите в сверке</span>
-                ) : (
-                  <span className="whitespace-nowrap">{CROSS[f.status].label}</span>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {(() => {
+        // статус поля: подсказка ИИ, где её подтверждать, или просто «совпало / расходится»
+        // подсказка с кнопками: только для полей, которые ядро ждёт от бухгалтера, и уже подтверждённых
+        const showHint = (f: CrossField) => f.status === "confirmed" || r.aiPending.includes(f.key);
+        const status = (f: CrossField, wide: boolean) =>
+          r.ex.kind === "letter" && f.status === "llm-only" ? (
+            <span className={cn(wide && "whitespace-nowrap", "text-muted-foreground")}>в письме без счёта не используется</span>
+          ) : !IN_COMPARE.has(f.key) && showHint(f) ? (
+            <div className={cn("text-left", wide && "ml-auto max-w-[260px]")}>
+              <AiHint f={f} model={cc.model} onConfirm={onConfirm} />
+            </div>
+          ) : IN_COMPARE.has(f.key) && r.aiPending.includes(f.key) ? (
+            <span className={cn(wide && "whitespace-nowrap")}>{CROSS[f.status].label}, подтвердите в сверке</span>
+          ) : (
+            <span className={cn(wide && "whitespace-nowrap")}>{CROSS[f.status].label}</span>
+          );
+        return (
+          <>
+            {/* широкая карточка: таблица */}
+            <table className="hidden w-full border-collapse text-[12.5px] @[620px]:table">
+              <thead>
+                <tr className="text-left text-[11.5px] text-muted-foreground">
+                  <th scope="col" className="px-3 pt-1.5 pb-1 font-medium">Поле</th>
+                  <th scope="col" className="px-2 pt-1.5 pb-1 font-medium">Правила</th>
+                  <th scope="col" className="px-2 pt-1.5 pb-1 font-medium">ИИ</th>
+                  <th scope="col" className="px-3 pt-1.5 pb-1 font-medium"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {cc.fields.map((f) => (
+                  <tr key={f.key} className={cn("border-t border-line align-top", f.status === "diff" && "bg-stop/[0.06]")}>
+                    <th scope="row" className="px-3 py-1.5 text-left font-normal text-muted-foreground">{f.label}</th>
+                    <td className="num px-2 py-1.5 text-ink">{f.rules}</td>
+                    <td className="num px-2 py-1.5 text-ink">{f.llm}</td>
+                    <td className={cn("px-3 py-1.5 text-right", CROSS[f.status].cls)}>{status(f, true)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {/* узкая карточка (телефон): по полю на строку, статус над значениями, ничего не вылезает за край */}
+            <dl className="divide-y divide-line text-[12.5px] @[620px]:hidden">
+              {cc.fields.map((f) => (
+                <div key={f.key} className={cn("px-3 py-2", f.status === "diff" && "bg-stop/[0.06]")}>
+                  <dt className="flex flex-wrap items-baseline justify-between gap-x-3">
+                    <span className="font-medium text-ink">{f.label}</span>
+                    <span className={cn("text-right", CROSS[f.status].cls)}>{IN_COMPARE.has(f.key) || !showHint(f) ? status(f, false) : null}</span>
+                  </dt>
+                  <dd className="mt-1 grid grid-cols-2 gap-x-3">
+                    <span className="min-w-0 break-words">
+                      <span className="block text-[11.5px] text-muted-foreground">Правила</span>
+                      <span className="num text-ink">{f.rules ?? "нет"}</span>
+                    </span>
+                    <span className="min-w-0 break-words">
+                      <span className="block text-[11.5px] text-muted-foreground">ИИ</span>
+                      <span className="num text-ink">{f.llm ?? "нет"}</span>
+                    </span>
+                  </dd>
+                  {!IN_COMPARE.has(f.key) && showHint(f) && <dd className="mt-1">{status(f, false)}</dd>}
+                </div>
+              ))}
+            </dl>
+          </>
+        );
+      })()}
       <p className="border-t border-line px-3 py-2 text-[11.5px] text-muted-foreground">
         Суммы и вердикт считает код. Поля, которых нет в разборе правил, берутся у ИИ, только если такие числа есть в тексте письма, и становятся подсказкой: пока бухгалтер её не подтвердит, счёт остаётся в «вопросе». Если разборы расходятся в заказе, количестве, цене или итоге, верное значение выбирает бухгалтер.
       </p>
@@ -690,18 +724,17 @@ function NoDecision({ r, onSelect }: { r: Result; onSelect: (id: string) => void
   const docs = main ? [main] : r.related;
   const why = r.replacedBy ? "заменён исправленной версией" : r.duplicateOf ? "копия счёта, платим по оригиналу" : docs.length ? "письмо без счёта, учтено в" : "письмо без счёта";
   return (
-    <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-[8px] border border-line bg-surface px-4 py-3 text-[13.5px] text-muted-foreground">
-      <Info className="size-4 shrink-0" aria-hidden />
-      <span>
-        Решение не нужно: {why}
-        {r.replacedBy || r.duplicateOf ? "" : docs.length ? "" : "."}
-      </span>
+    // один абзац: значок, текст и ссылка идут строкой и переносятся как обычный текст
+    <p className="rounded-[8px] border border-line bg-surface px-4 py-3 text-[13.5px] text-muted-foreground">
+      <Info className="mr-1.5 inline size-4 -translate-y-px align-middle" aria-hidden />
+      Решение не нужно: {why}
+      {r.replacedBy || r.duplicateOf ? " " : docs.length ? " " : "."}
       {docs.map((id, i) => (
         <span key={id}>
           <button onClick={() => onSelect(id)} className={cn(HIT, "text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent")}>
             {id}
           </button>
-          {i < docs.length - 1 ? "," : ""}
+          {i < docs.length - 1 ? ", " : ""}
         </span>
       ))}
     </p>

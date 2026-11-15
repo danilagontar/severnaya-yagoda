@@ -59,3 +59,31 @@ describe("письмо без счёта: номер это ссылка", () =>
     expect(f.rules).toBe("202 (ссылка)");
   });
 });
+
+describe("номер заказа от ИИ: число после «П», а не первое число", () => {
+  it("разные записи дают один номер", async () => {
+    const { normOrderNo } = await import("./provider");
+    expect(normOrderNo("3П-06")).toBe("ЗП-06"); // цифра 3 вместо буквы З: раньше получалось ЗП-03
+    expect(normOrderNo("ЗП-06")).toBe("ЗП-06");
+    expect(normOrderNo("ЗП 6")).toBe("ЗП-06");
+    expect(normOrderNo("ЗП-О6")).toBe("ЗП-06"); // буква О вместо нуля
+    expect(normOrderNo("ZP-08")).toBe("ЗП-08");
+    expect(normOrderNo("по заказу ЗП-12 от 05.11")).toBe("ЗП-12");
+    expect(normOrderNo("06")).toBe("ЗП-06");
+    expect(normOrderNo("от 05.11")).toBeNull();
+    expect(normOrderNo(null)).toBeNull();
+  });
+
+  it("письмо с «3П-06»: правила и ИИ совпадают, ложного расхождения нет", async () => {
+    const { vi } = await import("vitest");
+    const { extractWithLlm } = await import("./provider");
+    const text = "Cчет номер 0202 по 3П-06 пакет 300г 5000шт по 3 руб итого 15000 руб";
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ content: JSON.stringify({ invoiceNo: "0202", orderNo: "3П-06", qty: 5000, price: 3, total: 15000 }) }), { status: 200 }));
+    const { ex } = await extractWithLlm(text, "«Пакетная линия», invoice@paketline.example");
+    vi.unstubAllGlobals();
+    const f = ex.crossCheck!.fields.find((x) => x.key === "orderNo")!;
+    expect(f.rules).toBe("ЗП-06");
+    expect(f.llm).toBe("ЗП-06");
+    expect(f.status).toBe("match");
+  });
+});

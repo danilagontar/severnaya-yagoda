@@ -139,7 +139,7 @@ export function compareExtractions(text: string, base: Extracted, llm: Record<st
   const textNums = (text.match(/\d[\d\u00a0\u202f ]*(?:[.,]\d+)?/g) ?? []).map((x) => Number(x.replace(/[\u00a0\u202f ]/g, "").replace(",", ".")));
   const inText = (n: unknown) => typeof n === "number" && textNums.some((t) => Math.abs(t - n) < 1e-9);
   const fmt = (n: number | null | undefined) => (n === null || n === undefined ? null : n.toLocaleString("ru-RU", { maximumFractionDigits: 2 }));
-  const normOrder = (o: unknown) => (typeof o === "string" && /\d/.test(o) ? "ЗП-" + (o.match(/\d+/)![0]).padStart(2, "0") : null);
+  const normOrder = (o: unknown) => normOrderNo(o);
   const normStr = (s: unknown) => (typeof s === "string" && s.trim() ? s.trim().toLowerCase().replace(/ё/g, "е").replace(/[«»"]/g, "") : null);
   const fields: CrossField[] = [];
   const push = (key: CrossField["key"], r: string | null, l: string | null, same: boolean, lValid = true) => {
@@ -227,4 +227,17 @@ export async function polishDraft(d: Draft, verdict?: Verdict): Promise<{ body: 
   } catch (e) {
     return { body: d.body, note: `ИИ недоступен, оставлен шаблон (${(e as Error).message})` };
   }
+}
+
+/**
+ * Номер заказа из ответа ИИ в виде «ЗП-06». Берём число после «П» (как правила в extract.ts),
+ * а не первое число в строке: в «3П-06» (цифра 3 вместо буквы З) первое число это опечатка.
+ * «ЗП 06», «ЗП-О6» (буква О вместо нуля), «ZP-06», «06» тоже дают ЗП-06.
+ */
+export function normOrderNo(o: unknown): string | null {
+  if (typeof o !== "string" && typeof o !== "number") return null;
+  const s = String(o).trim();
+  const m = /(?:[З3]П|ZP)\s*-?\s*([\dОO]{1,3})(?![\dа-яё])/i.exec(s);
+  const digits = m ? m[1].replace(/[ОO]/gi, "0") : /^\d{1,3}$/.test(s) ? s : null;
+  return digits && /\d/.test(digits) ? "ЗП-" + digits.padStart(2, "0") : null;
 }

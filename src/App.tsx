@@ -440,29 +440,6 @@ export default function App() {
         )}
 
         <main ref={mainRef} className="min-w-0 flex-1 md:overflow-y-auto">
-          {changes && (
-            <div role="status" className="sticky top-3 z-20 mx-3 mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-line bg-hl px-4 py-2 text-[13px] text-ink">
-              <span className="font-medium">{changes.label}.</span>
-              {changes.items.length === 0 ? (
-                <span className="text-muted-foreground">Вердикты документов не изменились.</span>
-              ) : (
-                changes.items.map((c) => (
-                  <button key={c.id} onClick={() => select(c.id)} className="underline decoration-ink/30 underline-offset-2 hover:decoration-ink">
-                    {c.id}: {VERDICT[c.from].label.toLowerCase()} → {VERDICT[c.to].label.toLowerCase()}
-                  </button>
-                ))
-              )}
-              {events.length > 0 && (
-                <button onClick={undoLast} className="ml-auto text-[12.5px] underline decoration-ink/30 underline-offset-2 hover:decoration-ink">
-                  отменить последнее
-                </button>
-              )}
-              <button onClick={() => setChanges(null)} className={cn("grid size-6 place-items-center rounded hover:bg-black/5", !events.length && "ml-auto")} aria-label="Скрыть">
-                <X className="size-3.5" />
-              </button>
-            </div>
-          )}
-
           {view === "queue" && (
             <div className="flex items-center gap-2 border-b border-line bg-surface-2 px-4 py-2 text-[13px] md:hidden">
               <button onClick={() => setMobileQueue(true)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-input bg-surface px-2.5 font-medium text-ink">
@@ -475,6 +452,32 @@ export default function App() {
                   <span className="num font-medium text-ink">{current.id}</span><Sep />{current.supplier ?? current.ex.senderName ?? ""}
                 </span>
               )}
+            </div>
+          )}
+          {changes && (
+            // на телефоне плашка не липнет к верху (иначе закрывает карточку) и стоит под кнопкой «Очередь»;
+            // крестик всегда справа вверху, текст и ссылки переносятся слева от него
+            <div role="status" className="z-20 mx-3 mt-3 grid grid-cols-[1fr_auto] items-start gap-x-2 rounded-xl border border-line bg-hl px-4 py-2 text-[13px] text-ink md:sticky md:top-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="font-medium">{changes.label}.</span>
+                {changes.items.length === 0 ? (
+                  <span className="text-muted-foreground">Вердикты документов не изменились.</span>
+                ) : (
+                  changes.items.map((c) => (
+                    <button key={c.id} onClick={() => select(c.id)} className="underline decoration-ink/30 underline-offset-2 hover:decoration-ink">
+                      {c.id}: {VERDICT[c.from].label.toLowerCase()} → {VERDICT[c.to].label.toLowerCase()}
+                    </button>
+                  ))
+                )}
+                {events.length > 0 && (
+                  <button onClick={undoLast} className="text-[12.5px] underline decoration-ink/30 underline-offset-2 hover:decoration-ink">
+                    отменить последнее
+                  </button>
+                )}
+              </div>
+              <button onClick={() => setChanges(null)} className="-mr-1 grid size-6 place-items-center rounded hover:bg-black/5" aria-label="Скрыть">
+                <X className="size-3.5" />
+              </button>
             </div>
           )}
           {view === "queue" && !current && (
