@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Check, Copy, ExternalLink, FileText, Link2, Mail, RotateCcw, Sparkles, TriangleAlert, Info, OctagonX, Undo2 } from "lucide-react";
 import { HIT, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { Sep } from "@/components/sep";
 import { DecisionPanel } from "@/components/DecisionPanel";
 import type { Decision, DocStatus, TimelineItem } from "@/core/events";
 import { OrderTimeline } from "@/components/OrderTimeline";
+import { AiHint, hintFor, type ConfirmField } from "@/components/AiHint";
 
 const ROW_FIELD: Record<CompareRow["key"], FieldKey | null> = { supplier: null, material: "material", qty: "qty", price: "price", total: "total" };
 const FIELD_LABEL: Partial<Record<FieldKey, string>> = {
@@ -120,6 +121,7 @@ export function DocCard({
   timeline,
   llm,
   onCrossCheck,
+  onConfirmField,
 }: {
   r: Result;
   all: Result[];
@@ -129,6 +131,7 @@ export function DocCard({
   timeline: TimelineItem[];
   llm: LlmMode;
   onCrossCheck: (r: Result) => Promise<void>;
+  onConfirmField: ConfirmField;
 }) {
   const [active, setActive] = useState<FieldKey | null>(null);
   // при открытии карточки восстанавливаем последний открытый черновик этого документа
@@ -368,6 +371,8 @@ export function DocCard({
             const cell = (row: CompareRow) => {
               const f = ROW_FIELD[row.key];
               const hasSpan = !!(f && r.ex.spans[f]);
+              const hint = row.key === "supplier" ? undefined : hintFor(r.ex.crossCheck?.fields, row.key === "qty" ? ["qty", "pack"] : [row.key]);
+              const pending = hint && hint.status !== "confirmed";
               return (
                 <div
                   tabIndex={hasSpan ? 0 : -1}
@@ -378,11 +383,12 @@ export function DocCard({
                   className={cn("num rounded-[5px] px-2 py-1.5 transition-colors", CELL[row.status], hasSpan && "cursor-help")}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <span>{row.invoice ?? ""}</span>
+                    {!pending && <span>{row.invoice ?? ""}</span>}
                     {row.status === "bad" && <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-stop" aria-label="расхождение" />}
                     {row.status === "warn" && <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-ask" aria-label="требует внимания" />}
                   </div>
                   {row.note && <div className="mt-0.5 text-[12px] text-muted-foreground">{row.note}</div>}
+                  {hint && <AiHint f={hint} model={r.ex.crossCheck?.model} onConfirm={onConfirmField} />}
                 </div>
               );
             };
@@ -515,7 +521,7 @@ export function DocCard({
               <p className="mt-2 text-[12.5px] text-ask">Не найдено в тексте: {r.ex.missing.map((m) => FIELD_LABEL[m]).join(", ")}.</p>
             )}
           </div>
-          <CrossCheckPanel r={r} llm={llm} onRun={onCrossCheck} />
+          <CrossCheckPanel r={r} llm={llm} onRun={onCrossCheck} onConfirm={onConfirmField} />
         </section>
       </div>
 
@@ -526,6 +532,7 @@ export function DocCard({
 
       {/* Решение бухгалтера: дубли и письма-контекст решения не требуют */}
       <DecisionPanel key={r.id + r.verdict} r={r} status={status} onDecide={onDecide} />
+      {(r.verdict === "letter" || r.verdict === "duplicate") && <NoDecision r={r} onSelect={onSelect} />}
 
       {/* История заказа: в самом низу, под решением */}
       <OrderTimeline orderId={r.orderId} items={timeline} currentId={r.id} onSelect={onSelect} others={others} />
@@ -577,12 +584,31 @@ const CROSS: Record<CrossField["status"], { label: string; cls: string }> = {
   "rules-only": { label: "только правила", cls: "text-muted-foreground" },
   "llm-rejected": { label: "отклонено: нет в письме", cls: "text-return" },
   "both-empty": { label: "", cls: "" },
+  confirmed: { label: "подтвердил бухгалтер", cls: "text-pay" },
 };
+// поля, у которых есть строка в сверке: там подсказка и кнопки; остальные подтверждаются в панели разборов
+const IN_COMPARE = new Set<CrossField["key"]>(["material", "qty", "pack", "price", "total"]);
 
 /** Два независимых разбора письма: правила и GigaChat. */
-function CrossCheckPanel({ r, llm, onRun }: { r: Result; llm: LlmMode; onRun: (r: Result) => Promise<void> }) {
+function CrossCheckPanel({ r, llm, onRun, onConfirm }: { r: Result; llm: LlmMode; onRun: (r: Result) => Promise<void>; onConfirm: ConfirmField }) {
   const [busy, setBusy] = useState(false);
   const cc = r.ex.crossCheck;
+  // Подсказки ИИ сами: правила не прочитали поле счёта (или увидели только письмо со словом «счёт» и числами).
+  // Разбор кэшируется по тексту письма, поэтому повторно не запрашивается.
+  const needsAi =
+    llm === "gigachat" &&
+    !cc &&
+    (r.ex.missing.length > 0 || (r.ex.kind === "letter" && r.ex.topic === "other" && /сч[её]т|invoice/i.test(r.text) && /\d{2,}/.test(r.text)));
+  useEffect(() => {
+    if (!needsAi) return;
+    let alive = true;
+    setBusy(true);
+    onRun(r).finally(() => alive && setBusy(false));
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [r.id, needsAi]);
   if (llm !== "gigachat" && !cc) return null;
   if (!cc || cc.error) {
     return (
@@ -632,14 +658,50 @@ function CrossCheckPanel({ r, llm, onRun }: { r: Result; llm: LlmMode; onRun: (r
               <th scope="row" className="px-3 py-1.5 text-left font-normal text-muted-foreground">{f.label}</th>
               <td className="num px-2 py-1.5 text-ink">{f.rules}</td>
               <td className="num px-2 py-1.5 text-ink">{f.llm}</td>
-              <td className={cn("px-3 py-1.5 text-right whitespace-nowrap", CROSS[f.status].cls)}>{CROSS[f.status].label}</td>
+              <td className={cn("px-3 py-1.5 text-right", CROSS[f.status].cls)}>
+                {r.ex.kind === "letter" && f.status === "llm-only" ? (
+                  <span className="whitespace-nowrap text-muted-foreground">в письме без счёта не используется</span>
+                ) : !IN_COMPARE.has(f.key) && (f.status === "llm-only" || (f.status === "diff" && f.critical) || f.status === "confirmed") ? (
+                  <div className="ml-auto max-w-[260px] text-left">
+                    <AiHint f={f} model={cc.model} onConfirm={onConfirm} />
+                  </div>
+                ) : IN_COMPARE.has(f.key) && (f.status === "llm-only" || (f.status === "diff" && f.critical)) ? (
+                  <span className="whitespace-nowrap">{CROSS[f.status].label}, подтвердите в сверке</span>
+                ) : (
+                  <span className="whitespace-nowrap">{CROSS[f.status].label}</span>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
       <p className="border-t border-line px-3 py-2 text-[11.5px] text-muted-foreground">
-        Суммы и вердикт считает код. Поля, которых нет в разборе правил, берутся у ИИ, только если такие числа есть в тексте письма. Если разборы расходятся в заказе, количестве, цене или итоге, счёт уходит в «вопрос».
+        Суммы и вердикт считает код. Поля, которых нет в разборе правил, берутся у ИИ, только если такие числа есть в тексте письма, и становятся подсказкой: пока бухгалтер её не подтвердит, счёт остаётся в «вопросе». Если разборы расходятся в заказе, количестве, цене или итоге, верное значение выбирает бухгалтер.
       </p>
     </div>
+  );
+}
+
+/** Вместо блока решения у письма-контекста и дубля: почему решать не нужно и где решение по оплате. */
+function NoDecision({ r, onSelect }: { r: Result; onSelect: (id: string) => void }) {
+  const main = r.replacedBy ?? r.duplicateOf ?? null;
+  const docs = main ? [main] : r.related;
+  const why = r.replacedBy ? "заменён исправленной версией" : r.duplicateOf ? "копия счёта, платим по оригиналу" : docs.length ? "письмо без счёта, учтено в" : "письмо без счёта";
+  return (
+    <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-[8px] border border-line bg-surface px-4 py-3 text-[13.5px] text-muted-foreground">
+      <Info className="size-4 shrink-0" aria-hidden />
+      <span>
+        Решение не нужно: {why}
+        {r.replacedBy || r.duplicateOf ? "" : docs.length ? "" : "."}
+      </span>
+      {docs.map((id, i) => (
+        <span key={id}>
+          <button onClick={() => onSelect(id)} className={cn(HIT, "text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent")}>
+            {id}
+          </button>
+          {i < docs.length - 1 ? "," : ""}
+        </span>
+      ))}
+    </p>
   );
 }

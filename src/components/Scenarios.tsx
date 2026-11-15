@@ -183,7 +183,7 @@ export function Scenarios({
         ) : (
           <ol className="divide-y divide-line rounded-[8px] border border-line bg-surface">
             {events.map((e) => {
-              const doc = e.type === "letter" ? e.letter.id : e.type === "decision" || e.type === "reopen" ? e.doc : null;
+              const doc = e.type === "letter" ? e.letter.id : e.type === "decision" || e.type === "reopen" || e.type === "field-confirmed" ? e.doc : null;
               return (
                 <li key={e.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-[13px]">
                   <span className="num w-[86px] shrink-0 text-muted-foreground">{fmtAt(e.at)}</span>

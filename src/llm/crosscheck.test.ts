@@ -43,3 +43,19 @@ it("дата счёта не принимается за дату заказа",
   const cc2 = compareExtractions(text2, extractByRules(text2, ""), { orderDateRef: "05.11" }, "ИИ");
   expect(cc2.fields.find((f) => f.key === "orderDateRef")!.status).toBe("match");
 });
+
+describe("письмо без счёта: номер это ссылка", () => {
+  it("«По счёту 202» у правил и «202» у ИИ совпадают, подсказки нет", async () => {
+    const { vi } = await import("vitest");
+    const { extractWithLlm } = await import("./provider");
+    const text = "По счёту 202: просим перечислить оплату на новый расчётный счёт, у нас сменился банк. Р/с 40702810900000000777.";
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ content: JSON.stringify({ invoiceNo: "202" }) }), { status: 200 }));
+    const { ex } = await extractWithLlm(text, "«Пакетная линия», invoice@paketline.example");
+    vi.unstubAllGlobals();
+    expect(ex.kind).toBe("letter");
+    expect(ex.invoiceNo).toBeNull();
+    const f = ex.crossCheck!.fields.find((x) => x.key === "invoiceNo")!;
+    expect(f.status).toBe("match");
+    expect(f.rules).toBe("202 (ссылка)");
+  });
+});

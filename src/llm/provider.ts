@@ -92,8 +92,26 @@ export async function extractWithLlm(text: string, sender: string, model = "ИИ
     // правила не увидели счёт (не нашли сумму), а модель достроила проверенные поля: это счёт
     const hasMoney = ex.total !== null || (ex.qty !== null && ex.price !== null);
     if (ex.kind === "letter" && ex.topic !== "buyer-note" && ex.invoiceNo && hasMoney) {
-      ex.kind = ex.resend ? "copy" : /исправленн/i.test(text) ? "correction" : "invoice";
+      ex.kind = ex.resend ? "copy" : /исправлен|скорректирован|откорректирован|\bcorrected\b/i.test(text) ? "correction" : "invoice";
       ex.topic = null;
+    }
+    // Письмо без счёта («По счёту 202: у нас новый банк»): номер в нём это ссылка на полученный счёт.
+    // Правила прочитали его как ссылку, ИИ как номер счёта: это одно и то же, а не поле, которое правила пропустили.
+    // Остальное, что ИИ дочитал в письме без счёта, на сверку не влияет: возвращаем разбор правил.
+    if (ex.kind === "letter") {
+      for (const f of ex.crossCheck.fields) {
+        if (f.status !== "llm-only") continue;
+        if (f.key === "invoiceNo" && base.invoiceRef && f.llm?.replace(/^0+/, "") === base.invoiceRef.replace(/^0+/, "")) {
+          f.rules = `${base.invoiceRef} (ссылка)`;
+          f.status = "match";
+        }
+        (ex as unknown as Record<string, unknown>)[f.key] = (base as unknown as Record<string, unknown>)[f.key];
+      }
+      ex.unit = base.unit;
+      ex.pricePer = base.pricePer;
+      ex.spans = { ...base.spans };
+      ex.crossCheck.compared = ex.crossCheck.fields.filter((f) => f.status === "match" || f.status === "diff").length;
+      ex.crossCheck.matched = ex.crossCheck.fields.filter((f) => f.status === "match").length;
     }
     ex.missing = base.missing.filter((m) => ex[m as keyof Extracted] === null);
     const cc = ex.crossCheck;

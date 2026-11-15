@@ -76,7 +76,8 @@ export interface Packaging {
 }
 
 /** Сравнение двух независимых разборов письма: правила и LLM. */
-export type CrossStatus = "match" | "diff" | "llm-only" | "rules-only" | "llm-rejected" | "both-empty";
+// confirmed: значение от ИИ (или выбор между разборами) подтвердил или исправил бухгалтер
+export type CrossStatus = "match" | "diff" | "llm-only" | "rules-only" | "llm-rejected" | "both-empty" | "confirmed";
 export interface CrossField {
   key: "invoiceNo" | "orderNo" | "orderDateRef" | "material" | "qty" | "pack" | "price" | "total";
   label: string;
@@ -84,7 +85,10 @@ export interface CrossField {
   llm: string | null;
   status: CrossStatus;
   critical: boolean; // влияет на сумму или привязку
+  confirmed?: { value: string; source: FieldSource; was: CrossStatus }; // решение бухгалтера по полю
 }
+/** Откуда взято подтверждённое значение: у ИИ, у правил или бухгалтер ввёл своё. */
+export type FieldSource = "ai" | "rules" | "edited";
 export interface CrossCheck {
   model: string;
   fields: CrossField[];
@@ -138,6 +142,7 @@ export interface Finding {
   text: string;
   short?: string; // тема в несколько слов для заголовка, когда тем у счёта несколько
   source?: string; // ЗП-04, СГ-05, «приёмка», В-25…
+  field?: CrossField["key"]; // поле разбора, которое ждёт подтверждения бухгалтера
 }
 
 export type Role = "buyer" | "supplier" | "warehouse" | "treasurer" | "cfo" | "procurement";
@@ -191,4 +196,5 @@ export interface Result {
   compare: CompareRow[];
   orderSummary: string | null; // «по заказу выставлено X из Y»
   isNew: boolean;
+  aiPending: CrossField["key"][]; // поля, которые прочитал только ИИ (или разборы разошлись), а бухгалтер ещё не подтвердил
 }

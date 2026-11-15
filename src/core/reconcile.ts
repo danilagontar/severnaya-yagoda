@@ -7,7 +7,9 @@ import type {
   Approval,
   CaseData,
   CompareRow,
+  CrossField,
   Extracted,
+  FieldSource,
   Finding,
   Letter,
   Order,
@@ -16,6 +18,53 @@ import type {
 } from "./types";
 
 export type Extractor = (text: string, sender: string) => Extracted;
+
+/** Решения бухгалтера по полям разбора одного документа: последнее по каждому полю. */
+export type FieldConfirmations = Partial<Record<CrossField["key"], { value: string; source: FieldSource }>>;
+
+const parseRuNum = (s: string | null): number | null => {
+  if (!s) return null;
+  const t = s.replace(/[\s  ]/g, "").replace(/₽|руб\.?/gi, "").replace(",", ".");
+  return /^\d+(?:\.\d+)?$/.test(t) ? Number(t) : null;
+};
+
+/**
+ * Значения, которые подтвердил или исправил бухгалтер, подставляются в разбор письма.
+ * Без подтверждения поле от ИИ остаётся «на проверке» и не даёт вердикт «оплатить» (см. ниже).
+ */
+export function applyConfirmed(ex: Extracted, conf: FieldConfirmations | undefined): Extracted {
+  if (!conf || !ex.crossCheck) return ex;
+  const out: Extracted = { ...ex, crossCheck: { ...ex.crossCheck, fields: ex.crossCheck.fields.map((f) => ({ ...f })) } };
+  for (const f of out.crossCheck!.fields) {
+    const c = conf[f.key];
+    if (!c || !(f.status === "llm-only" || f.status === "diff")) continue;
+    const v = c.source === "rules" ? f.rules : c.source === "ai" ? f.llm : c.value;
+    if (v === null) continue;
+    // значение уже в разборе: у ИИ при «дополнил ИИ», у правил при расхождении
+    const inEx = (c.source === "ai" && f.status === "llm-only") || (c.source === "rules" && f.status === "diff");
+    if (!inEx) {
+      if (f.key === "qty" || f.key === "price" || f.key === "total") {
+        const n = parseRuNum(v);
+        if (n === null) continue;
+        out[f.key] = n;
+      } else if (f.key === "pack") {
+        const m = v.match(/^([\d\s  .,]+)\s*×\s*([\d\s  .,]+)\s*(\S*)$/);
+        const count = parseRuNum(m?.[1] ?? null), perPack = parseRuNum(m?.[2] ?? null);
+        if (!m || count === null || perPack === null || !out.pack) continue;
+        out.pack = { ...out.pack, count, perPack, innerUnit: m[3] || out.pack.innerUnit };
+        out.qty = count;
+      } else if (f.key === "orderNo") {
+        const d = v.match(/\d+/)?.[0];
+        if (!d) continue;
+        out.orderNo = "ЗП-" + d.padStart(2, "0");
+      } else out[f.key] = v.trim();
+    }
+    f.confirmed = { value: v, source: c.source, was: f.status };
+    f.status = "confirmed";
+  }
+  out.missing = out.missing.filter((m) => out[m as keyof Extracted] === null);
+  return out;
+}
 
 const EPS = 0.005;
 const CFO = "Финансовый директор";
@@ -187,7 +236,13 @@ interface Claim {
   qty: number;
 }
 
-export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, extractor: Extractor = extractByRules, newIds: Set<string> = new Set()): Result[] {
+export function reconcileAll(
+  data: CaseData,
+  letters: Letter[] = data.letters,
+  extractor: Extractor = extractByRules,
+  newIds: Set<string> = new Set(),
+  confirmed: Map<string, FieldConfirmations> = new Map(),
+): Result[] {
   const orders = data.orders;
   const approvals = data.approvals.map(parseApproval);
   const snapshot = parseDate(data.meta.snapshot)!;
@@ -199,7 +254,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
 
   // Сначала все счета (в порядке поступления), затем письма-контекст: так письмо
   // о реквизитах влияет на счёт, даже если пришло раньше него.
-  const exs = letters.map((l) => ({ l, ex: extractor(l.text, l.sender) }));
+  const exs = letters.map((l) => ({ l, ex: applyConfirmed(extractor(l.text, l.sender), confirmed.get(l.id)) }));
   // Домен, с которого поставщик написал первым (П-2): письмо от того же названия с другого домена
   // («lentaprom-pay.example» вместо «lentaprom.example») считаем подменой отправителя.
   const firstDomain = new Map<string, string>();
@@ -235,6 +290,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
     compare: [],
     orderSummary: null,
     isNew: newIds.has(l.id),
+    aiPending: [],
   });
 
   const addAddr = (r: Result, a: Addressee) => {
@@ -260,8 +316,19 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
     const cc = ex.crossCheck;
     if (cc) {
       for (const f of cc.fields) {
-        if (f.critical && f.status === "diff")
-          r.findings.push({ rule: "Разбор", level: "ask", text: `${f.label}: правила прочитали «${f.rules}», ${cc.model} «${f.llm}». Сверка идёт по правилам; проверьте письмо.` });
+        if (f.critical && f.status === "diff") {
+          r.aiPending.push(f.key);
+          r.findings.push({ rule: "Разбор", level: "ask", short: "разборы письма разошлись", field: f.key, text: `${f.label}: правила прочитали «${f.rules}», ${cc.model} «${f.llm}». Выберите верное значение в сверке.` });
+        }
+        // значение есть только у ИИ: подсказка, пока его не подтвердит человек (оплатить по ней нельзя)
+        if (f.status === "llm-only") {
+          r.aiPending.push(f.key);
+          r.findings.push({ rule: "Разбор", level: "ask", short: "значение от ИИ не подтверждено", field: f.key, text: `${f.label}: ${cc.model} прочитал «${f.llm}», правила не нашли. Подтвердите или исправьте значение в сверке.` });
+        }
+        if (f.status === "confirmed" && f.confirmed) {
+          const how = f.confirmed.source === "edited" ? "ввёл бухгалтер" : f.confirmed.source === "ai" ? `значение ${cc.model}, подтвердил бухгалтер` : "значение правил, выбрал бухгалтер";
+          r.findings.push({ rule: "Разбор", level: "info", text: `${f.label}: ${f.confirmed.value} (${how}).` });
+        }
         if (f.status === "llm-rejected")
           r.findings.push({ rule: "Разбор", level: "info", text: `${cc.model} предложил «${f.llm}» в поле «${f.label}», но такого числа в письме нет. Значение отклонено.` });
       }
@@ -333,6 +400,7 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
       prev.brief = `Заменён версией ${r.id}`;
       prev.findings = [{ rule: "П-3", level: "info", text: `Исправленный счёт ${ex.invoiceNo} (${r.id}) заменяет эту версию.`, source: r.id }];
       prev.addressees = [];
+      prev.aiPending = [];
       if (prev.orderId) claims.set(prev.orderId, (claims.get(prev.orderId) ?? []).filter((c) => c.id !== prev.id));
       link(r, prev);
       r.findings.push({ rule: "П-3", level: "info", text: `Исправленная версия: заменяет ${prev.id}.`, source: prev.id });
@@ -355,6 +423,10 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
           addAddr(r, { role: "treasurer", name: TREASURER, reason: `дата оплаты после решения по ${prev.id}` });
           r.findings.push({ rule: "П-9", level: "info", text: `Поставщик спрашивает дату оплаты. Ответ после решения по ${prev.id}.` });
         }
+        // копию не оплачиваем: цену и итог от ИИ подтверждать незачем; номер счёта от ИИ остаётся на проверке,
+        // потому что именно по нему счёт признан копией
+        r.aiPending = r.aiPending.filter((k) => k === "invoiceNo");
+        r.findings = r.findings.filter((f) => !f.field || f.field === "invoiceNo");
         const o = orders.find((x) => x.id === r.orderId) ?? null;
         r.compare = compareRows(r, o, null, approvals, null);
         continue;
@@ -673,8 +745,9 @@ function finalizeVerdict(r: Result, arithmeticError: boolean) {
   const has = (lvl: Finding["level"]) => r.findings.some((f) => f.level === lvl);
   let v: Verdict = "pay";
   if (has("stop")) v = "stop";
-  else if (arithmeticError) v = "return";
-  else if (has("ask")) v = "ask";
+  // ошибка в итоге по непроверенному числу от ИИ: сначала подтвердить число, потом возвращать счёт
+  else if (arithmeticError && !r.aiPending.length) v = "return";
+  else if (has("ask") || arithmeticError) v = "ask";
   r.verdict = v;
   r.payNow = v === "pay" ? r.due ?? 0 : 0;
 }

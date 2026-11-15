@@ -77,55 +77,46 @@ describe("новые письма", () => {
   });
 });
 
-// Демо-письма для защиты (src/data/demo-letters.ts): ожидаемые вердикты без ИИ.
+// Демо-письма для защиты (src/data/demo-letters.ts): ожидаемые вердикты без ИИ, одно письмо на одну проблему.
 import { DEMO_LETTERS } from "../data/demo-letters";
 describe("демо-письма (только правила)", () => {
-  // free и table: письма «для ИИ»; здесь проверяем, что без ИИ они не ломают очередь
   const expectV: Record<string, string> = {
+    "ai-hint": "ask", // без ИИ цена не прочитана; с ИИ подсказка (см. ai-hints.test.ts)
     bank: "stop",
-    copy: "duplicate",
-    bags: "pay",
-    total: "return",
-    lookalike: "stop",
-    free: "duplicate",
-    table: "letter",
-    forward: "duplicate",
-    two: "ask",
     "same-bank": "letter",
-    quote: "duplicate",
+    spoof: "stop",
+    total: "return",
     typos: "duplicate",
+    bags: "pay",
   };
+  it("на каждое письмо свой итог", () => {
+    expect(DEMO_LETTERS.map((d) => d.id).sort()).toEqual(Object.keys(expectV).sort());
+  });
   for (const d of DEMO_LETTERS) {
     it(`${d.title}: ${expectV[d.id]}`, () => {
       const { r, get } = run(d.sender, d.text);
       expect(r.verdict).toBe(expectV[d.id]);
+      if (d.id === "ai-hint") expect(r.ex.price).toBeNull();
       if (d.id === "bank") expect(get("В-02").verdict).toBe("ask");
-      if (d.id === "copy") expect(r.duplicateOf).toBe("В-04");
-      if (d.id === "bags") {
-        expect(r.orderId).toBe("ЗП-09");
-        expect(r.due).toBe(63000);
-        expect(get("В-13").verdict).toBe("duplicate");
+      if (d.id === "same-bank") expect(get("В-02").verdict).toBe("pay");
+      if (d.id === "spoof") {
+        expect(r.supplier).toBe("Лентапром");
+        expect(r.payNow).toBe(0);
+        expect(get("В-15").verdict).toBe("return"); // подделка не заменяет настоящий счёт
       }
       if (d.id === "total") {
         expect(get("В-24").verdict).toBe("duplicate");
         expect(r.prevented).toContainEqual({ category: "arithmetic", amount: 500 });
       }
-      if (d.id === "free") expect(r.duplicateOf).toBe("В-21");
-      if (d.id === "table") expect(get("В-04").verdict).toBe("pay"); // без ИИ это просто письмо, очередь не меняется
-      if (d.id === "forward") {
-        expect(r.duplicateOf).toBe("В-02");
-        expect(r.supplier).toBe("Пакетная линия");
-      }
-      if (d.id === "two") expect(r.ex.otherInvoices).toEqual(["126"]);
-      if (d.id === "same-bank") expect(get("В-02").verdict).toBe("pay");
-      if (d.id === "quote") {
-        expect(r.duplicateOf).toBe("В-06");
-        expect(r.addressees.some((a) => a.role === "treasurer")).toBe(true);
-      }
       if (d.id === "typos") expect(r.duplicateOf).toBe("В-02");
+      if (d.id === "bags") {
+        expect(r.orderId).toBe("ЗП-09");
+        expect(r.due).toBe(63000);
+        expect(get("В-13").verdict).toBe("duplicate");
+      }
       // ни одно демо-письмо не должно просить «условия предоплаты», если всё принятое уже выставлено
       // «two»: счёт 125 на непринятые 2 000 шт в пределах ЗП-07: там П-5 законен
-      if (d.id !== "lookalike" && d.id !== "two") expect(r.findings.some((f) => f.rule === "П-5")).toBe(false);
+      expect(r.findings.some((f) => f.rule === "П-5")).toBe(false);
     });
   }
 });

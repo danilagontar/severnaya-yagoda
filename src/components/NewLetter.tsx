@@ -38,7 +38,7 @@ export function NewLetter({ onSubmit, llm, nextId }: { onSubmit: (sender: string
         <h2 id="new-h" className="text-[17px] font-semibold text-ink">
           Своё письмо
         </h2>
-        <p className="mt-1 max-w-[70ch] text-[13px] text-muted-foreground">
+        <p className="mt-1 text-[13px] text-muted-foreground">
           Вставьте письмо, как будто оно пришло в ящик бухгалтерии. Оно получит номер {nextId}, встанет в очередь, и вся очередь пересчитается: письмо о реквизитах или копия счёта
           меняют вердикт уже разобранных документов. Поля из текста извлекают {llm === "gigachat" ? "правила и ИИ независимо друг от друга" : "правила (ИИ не подключён)"}, суммы считает
           только код.

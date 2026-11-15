@@ -159,8 +159,8 @@ export default function App() {
     const removedIds = new Set(extra.map((l) => l.id));
     forgetDrafts((id) => removedIds.has(id));
     setSeen((s) => new Set([...s].filter((id) => !removedIds.has(id))));
-    // убираем только письма; решения по ним без документа ни на что не влияют
-    apply(events.filter((e) => e.type !== "letter"), { label: "Новые письма убраны из очереди" });
+    // вместе с письмами уходят решения и подтверждения полей по ним: номера Н-01… выдаются заново
+    apply(events.filter((e) => e.type !== "letter" && !("doc" in e && removedIds.has(e.doc))), { label: "Новые письма убраны из очереди" });
     setSelected(null);
   };
 
@@ -478,6 +478,7 @@ export default function App() {
               onDecide={(d) => decide(current, d)}
               timeline={timeline}
               llm={llm.mode}
+              onConfirmField={(field, value, source) => push(makeEvent({ type: "field-confirmed", doc: current.id, field, value, source }, clock()))}
               onCrossCheck={async (r) => {
                 const { ex } = await extractWithLlm(r.text, r.sender, "ИИ");
                 setLlmCache((c) => ({ ...c, [r.sender + "\n" + r.text]: ex }));

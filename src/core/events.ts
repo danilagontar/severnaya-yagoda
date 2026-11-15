@@ -5,8 +5,8 @@
 // и подписания согласований (Directum RX), решения бухгалтера и передача реестра ФД.
 // В продукте этот же журнал станет журналом действий в базе.
 
-import { reconcileAll, type Extractor } from "./reconcile";
-import type { CaseData, Letter, Result, Verdict } from "./types";
+import { reconcileAll, type Extractor, type FieldConfirmations } from "./reconcile";
+import type { CaseData, CrossField, FieldSource, Letter, Result, Verdict } from "./types";
 
 // ---------- события ----------
 
@@ -26,6 +26,8 @@ type EventBody =
   | { type: "approval-signed"; approval: string; date: string } // Directum RX: согласование подписано
   | { type: "decision"; doc: string; decision: Decision } // бухгалтер
   | { type: "reopen"; doc: string } // бухгалтер: вернуть в работу
+  // бухгалтер: подтвердил значение от ИИ, выбрал между разборами или ввёл своё; source null: снять подтверждение
+  | { type: "field-confirmed"; doc: string; field: CrossField["key"]; value: string; source: FieldSource | null }
   | { type: "registry-submitted"; ids: string[]; total: number } // бухгалтер: реестр передан ФД
   | { type: "registry-approved" }; // ФД: реестр утверждён
 
@@ -38,6 +40,7 @@ export const EVENT_SOURCE: Record<EventType, string> = {
   "approval-signed": "Directum RX",
   decision: "бухгалтер",
   reopen: "бухгалтер",
+  "field-confirmed": "бухгалтер",
   "registry-submitted": "бухгалтер",
   "registry-approved": "финансовый директор",
 };
@@ -226,9 +229,24 @@ export interface PilotState {
 }
 
 /** Исходные данные + журнал → сверка → решения → реестр. Сверка та же, что для эталона. */
+/** Подтверждения полей разбора по документам: последнее событие по каждому полю. */
+export function fieldConfirmations(events: AppEvent[]): Map<string, FieldConfirmations> {
+  const out = new Map<string, FieldConfirmations>();
+  for (const e of events) {
+    // письмо с тем же номером Н-xx пришло заново: подтверждения прежнего письма к нему не относятся
+    if (e.type === "letter") out.delete(e.letter.id);
+    if (e.type !== "field-confirmed") continue;
+    const c = { ...(out.get(e.doc) ?? {}) };
+    if (e.source) c[e.field] = { value: e.value, source: e.source };
+    else delete c[e.field];
+    out.set(e.doc, c);
+  }
+  return out;
+}
+
 export function computeState(base: CaseData, events: AppEvent[], extractor?: Extractor): PilotState {
   const { data, letters, newIds } = applyData(base, events);
-  const results = reconcileAll(data, letters, extractor, newIds);
+  const results = reconcileAll(data, letters, extractor, newIds, fieldConfirmations(events));
   const statuses = applyDecisions(results, events);
   return { data, results, statuses, registry: registryState(results, statuses, events) };
 }
@@ -280,7 +298,13 @@ export function orderTimeline(base: CaseData, events: AppEvent[], results: Resul
       out.push({ key: e.id, when: atLabel(e.at), text: `Приёмка +${e.qty.toLocaleString("ru-RU")} ${o.unit}`, source: "1С:ERP", simulated: true });
     else if (e.type === "approval-signed" && base.approvals.some((a) => a.id === e.approval && a.order === orderId))
       out.push({ key: e.id, when: atLabel(e.at), text: `${e.approval} подписано`, source: "Directum RX", simulated: true });
-    else if (e.type === "letter") {
+    else if (e.type === "field-confirmed") {
+      const r = results.find((x) => x.id === e.doc);
+      if (r?.orderId === orderId) {
+        const how = !e.source ? "подтверждение снято" : e.source === "edited" ? `${e.value}, введено вручную` : e.source === "ai" ? `${e.value}, значение ИИ подтверждено` : `${e.value}, выбрано значение правил`;
+        out.push({ key: e.id, when: atLabel(e.at), text: `${r.id}: ${FIELD_NAME[e.field]} ${how}`, source: "бухгалтер", docId: r.id });
+      }
+    } else if (e.type === "letter") {
       const r = results.find((x) => x.id === e.letter.id);
       if (r?.orderId === orderId)
         out.push({ key: e.id, when: e.letter.received, text: `${r.id} ${r.ex.kind === "letter" ? "письмо" : `счёт ${r.ex.invoiceNo ?? "без номера"}`}`, source: "почта", docId: r.id, verdict: r.verdict, simulated: true });
@@ -322,6 +346,17 @@ export function metricsDelta(a: Metrics, b: Metrics): Partial<Metrics> {
   return out;
 }
 
+const FIELD_NAME: Record<CrossField["key"], string> = {
+  invoiceNo: "номер счёта",
+  orderNo: "заказ",
+  orderDateRef: "дата заказа",
+  material: "материал",
+  qty: "количество",
+  pack: "фасовка",
+  price: "цена",
+  total: "итог",
+};
+
 /** Время события как в данных кейса: «ДД.ММ ЧЧ:ММ». */
 export function atLabel(iso: string | null): string {
   if (!iso) return "";
@@ -342,6 +377,8 @@ export function describeEvent(e: AppEvent): string {
       return `${e.doc}: ${DECISION_LABEL[e.decision.kind].toLowerCase()}`;
     case "reopen":
       return `${e.doc}: возвращён в работу`;
+    case "field-confirmed":
+      return e.source ? `${e.doc}: ${FIELD_NAME[e.field]} ${e.value} ${e.source === "edited" ? "введено вручную" : "подтверждено"}` : `${e.doc}: подтверждение поля «${FIELD_NAME[e.field]}» снято`;
     case "registry-submitted":
       return "реестр передан ФД";
     case "registry-approved":
