@@ -173,6 +173,13 @@ export default function App() {
   const decided = decidable.filter((r) => statuses.get(r.id)?.resolved).length;
   const waitingCount = decidable.filter((r) => statuses.get(r.id)?.waiting).length;
 
+  const toQueue = () => {
+    setFilter({ ...DEFAULT_FILTER, sort: filter.sort, dirs: filter.dirs, hideDone: filter.hideDone, verdicts: ["stop", "return", "ask"] });
+    setCollapsed(new Set([...collapsed].filter((g) => g !== "decide")));
+    setView("queue");
+    if (!window.matchMedia("(min-width: 768px)").matches) setMobileQueue(true);
+  };
+
   /**
    * Применить новый журнал: пересчитать, показать разницу показателей на плитках и (с label) баннер
    * с документами, у которых сменился вердикт.
@@ -264,6 +271,85 @@ export default function App() {
     { id: "etalon", label: "Сверить с эталоном", short: "Эталон" },
   ];
 
+
+  // плитки итогов: порядок по тому, с чего бухгалтер начинает день
+  const counts = (["stop", "return", "ask"] as const).filter((v) => openBy(v) > 0);
+  const needTile: Tile = {
+    id: "need",
+    label: "Требует решения",
+    value: String(needDecision),
+    suffix: `из ${decidable.length}`,
+    tone: needDecision ? "ask" : "pay",
+    sub: (
+      <>
+        {counts.map((v, i) => (
+          <span key={v} className={v === "stop" ? "text-stop" : "text-ask"}>
+            {i > 0 && <Sep />}
+            {VERDICT_SHORT[v]} {openBy(v)}
+          </span>
+        ))}
+        {waitingCount > 0 && (
+          <span className="text-muted-foreground">
+            {counts.length > 0 && <Sep />}ждём ответа {waitingCount}
+          </span>
+        )}
+        {!counts.length && !waitingCount && <span className="text-pay">всё решено</span>}
+      </>
+    ),
+    progress: decidable.length ? (decidable.length - needDecision) / decidable.length : 1,
+    link: { label: "в очередь", onClick: toQueue },
+    detail: `Документы со стопом, возвратом или вопросом без решения бухгалтера. Всего решений требуют ${decidable.length} документов (дубли и письма не в счёт), разобрано ${decided}.`,
+    delta: delta?.need,
+    flash: flashDelta?.need,
+    polarity: -1,
+  };
+  const tiles: Tile[] = [
+    needTile,
+    {
+      id: "pay",
+      label: "К оплате",
+      hint: `${registry.proposed.count} ${plural(registry.proposed.count, INVOICES)}`,
+      value: fmtRub(registry.proposed.total),
+      sub: <span className={registry.total ? "text-pay" : "text-muted-foreground"}>в реестре {fmtRub(registry.total)}</span>,
+      progress: registry.proposed.total ? Math.min(1, registry.total / registry.proposed.total) : 0,
+      link: { label: "реестр", onClick: () => setView("registry") },
+      detail: `Сверка предлагает к оплате ${num(registry.proposed.total)} ₽. В реестре ${num(registry.total)} ₽ (${registry.items.length} ${plural(registry.items.length, INVOICES)}): туда попадают только счета, подтверждённые бухгалтером.`,
+      delta: delta?.registry,
+      flash: flashDelta?.registry,
+      polarity: 1,
+    },
+    {
+      id: "deferred",
+      label: "Отложено",
+      value: fmtRub(summary.deferred + summary.held),
+      sub: (
+        <>
+          ждём склад {num(summary.deferred)}
+          {summary.held > 0 && (
+            <>
+              <Sep />
+              ждём реквизиты {num(summary.held)}
+            </>
+          )}
+        </>
+      ),
+      detail: `Эти деньги заплатят позже, это не экономия.\nДо приёмки на складе или ответа закупщика: ${num(summary.deferred)} ₽.${summary.held > 0 ? `\nСверка пройдена, но поставщик просит сменить реквизиты (П-2): ${num(summary.held)} ₽.` : ""}`,
+      delta: delta?.deferred,
+      flash: flashDelta?.deferred,
+      polarity: 0,
+    },
+    {
+      id: "prevented",
+      label: "Не платить",
+      value: fmtRub(summary.preventedTotal),
+      sub: <span className="text-muted-foreground">дубли, подмена, цены, итог</span>,
+      detail: `Дубли ${num(summary.prevented.duplicate)} ₽\nПодмена получателя ${num(summary.prevented.fraud)} ₽\nЦены без согласования ${num(summary.prevented.price)} ₽\nОшибка в итоге ${num(summary.prevented.arithmetic)} ₽`,
+      delta: delta?.prevented,
+      flash: flashDelta?.prevented,
+      polarity: 0,
+    },
+  ];
+
   return (
     <div className="flex min-h-full flex-col md:h-full">
       {/* Рейка */}
@@ -309,56 +395,21 @@ export default function App() {
 
       {/* Итоги очереди */}
       {/* Сетка: у плиток одного ряда общая строка подписей и общая строка сумм: всё на одном уровне, даже если подпись переносится */}
-      <section aria-label="Итоги очереди" className="grid shrink-0 grid-cols-[repeat(auto-fit,minmax(150px,1fr))] border-b border-line bg-surface">
-        <Stat
-          key={`reg-${flash}`}
-          label="В реестре"
-          hint={`${registry.items.length} ${plural(registry.items.length, INVOICES)}`}
-          value={fmtRub(registry.total)}
-          tone="pay"
-          link={{ label: "реестр", onClick: () => setView("registry") }}
-          extra={`из ${fmtRub(registry.proposed.total)}`}
-          delta={delta?.registry} flash={flashDelta?.registry} polarity={1}
-          detail={`Сверка предлагает к оплате ${num(registry.proposed.total)} ₽ (${registry.proposed.count} ${plural(registry.proposed.count, INVOICES)}). В реестр попадают только счета, подтверждённые бухгалтером.`}
-        />
-        <Stat
-          key={`prev-${flash}`}
-          label="Не платить"
-          hint="дубли, подмена, цены, итог"
-          value={fmtRub(summary.preventedTotal)}
-          delta={delta?.prevented} flash={flashDelta?.prevented} polarity={0}
-          detail={`Дубли ${num(summary.prevented.duplicate)} ₽
-Подмена получателя ${num(summary.prevented.fraud)} ₽
-Цены без согласования ${num(summary.prevented.price)} ₽
-Ошибка в итоге ${num(summary.prevented.arithmetic)} ₽`}
-        />
-        <Stat
-          key={`def-${flash}`}
-          label="Отложено"
-          hint="не экономия"
-          value={fmtRub(summary.deferred)}
-          delta={delta?.deferred} flash={flashDelta?.deferred} polarity={0}
-          extra={summary.held > 0 ? `+ задержано ${fmtRub(summary.held)}` : undefined}
-          detail={`До приёмки на складе или ответа закупщика. Эти деньги заплатят позже, это не экономия.${summary.held > 0 ? `\nОтдельно задержано ${num(summary.held)} ₽: сверка пройдена, но поставщику пишут о смене реквизитов (П-2).` : ""}`}
-        />
-        <Stat
-          key={`need-${flash}`}
-          label="Требует решения"
-          hint={`стоп ${openBy("stop")} | вернуть ${openBy("return")} | вопрос ${openBy("ask")}`}
-          value={String(needDecision)}
-          delta={delta?.need} flash={flashDelta?.need} polarity={-1}
-          tone="ask"
-          link={{
-            label: "в очередь",
-            onClick: () => {
-              setFilter({ ...DEFAULT_FILTER, sort: filter.sort, dirs: filter.dirs, hideDone: filter.hideDone, verdicts: ["stop", "return", "ask"] });
-              setCollapsed(new Set([...collapsed].filter((g) => g !== "decide")));
-              setView("queue");
-              if (!window.matchMedia("(min-width: 768px)").matches) setMobileQueue(true);
-            },
-          }}
-        />
-        <Stat key={`dec-${flash}`} label="Разобрано" hint={waitingCount ? `ждём ответа ${waitingCount}` : `в ящике ${summary.total}`} value={`${decided} из ${decidable.length}`} delta={delta?.decided} flash={flashDelta?.decided} polarity={1} />
+      {/* Итоги: на компьютере четыре плитки, на телефоне главная плитка и список из трёх строк */}
+      <section aria-label="Итоги очереди" className="shrink-0 border-b border-line bg-surface">
+        <div className="hidden grid-cols-[1fr_1fr_1.2fr_1fr] md:grid">
+          {tiles.map((t) => (
+            <Stat key={`${t.id}-${flash}`} {...t} />
+          ))}
+        </div>
+        <div className="md:hidden">
+          <Stat key={`m-${needTile.id}-${flash}`} {...needTile} />
+          <ul className="border-t border-line px-4 py-1.5">
+            {tiles.slice(1).map((t) => (
+              <StatRow key={`m-${t.id}-${flash}`} {...t} />
+            ))}
+          </ul>
+        </div>
       </section>
 
       <div className="flex flex-1 md:min-h-0">
@@ -466,56 +517,109 @@ export default function App() {
 
 const num = (n: number) => n.toLocaleString("ru-RU");
 
-function Stat({
-  label,
-  hint,
-  value,
-  detail,
-  tone,
-  link,
-  extra,
-  delta,
-  flash,
-  polarity = 0,
-}: {
+const VERDICT_SHORT = { stop: "стоп", return: "вернуть", ask: "вопрос" } as const;
+
+type Tile = {
+  id: string;
   label: string;
-  hint?: string;
+  hint?: string; // уточнение в строке названия
   value: string;
-  detail?: string;
+  suffix?: string; // мелко после значения: «из 18»
+  sub?: React.ReactNode; // строка под значением: разбивка
+  progress?: number; // 0..1, полоска под плиткой
+  detail?: string; // всплывающая подсказка
   tone?: "pay" | "ask";
   link?: { label: string; onClick: () => void };
-  extra?: string;
   delta?: number; // изменение после последнего события (цифра, скрывается через 4 с)
   flash?: number; // изменение для подсветки плитки (живёт до следующего события)
   polarity?: 1 | -1 | 0; // 1: рост это хорошо, −1: рост это плохо, 0: без оценки
-}) {
-  // цвет по смыслу: стало лучше: зелёный, хуже: красный, без оценки: жёлтый
-  const meaning = (v?: number) => (!v ? null : polarity === 0 ? "neutral" : Math.sign(v) * polarity > 0 ? "good" : "bad");
-  const flashTone = meaning(flash);
-  const chipTone = meaning(delta);
+};
+
+// цвет по смыслу: стало лучше: зелёный, хуже: красный, без оценки: жёлтый
+const meaning = (polarity: Tile["polarity"], v?: number) => (!v ? null : !polarity ? "neutral" : Math.sign(v) * polarity > 0 ? "good" : "bad");
+const flashClass = (m: string | null) => (m === "good" ? "tile-up" : m === "bad" ? "tile-down" : m === "neutral" ? "tile-neutral" : "");
+
+function DeltaChip({ delta, polarity }: { delta?: number; polarity?: Tile["polarity"] }) {
+  if (!delta) return null;
+  const m = meaning(polarity, delta);
   return (
-    <div className={cn("row-span-2 grid min-w-0 grid-rows-subgrid border-r border-b border-line px-4 py-2 last:border-r-0 md:border-b-0", flashTone === "good" && "tile-up", flashTone === "bad" && "tile-down", flashTone === "neutral" && "tile-neutral")} title={detail}>
-      <span className="line-clamp-2 self-start text-[12px] leading-tight text-muted-foreground">
-        {label}
-        {hint && <span className="num"><Sep />{hint}</span>}
+    <span className={cn("num shrink-0 rounded-[4px] px-1.5 text-[12px] font-semibold", m === "good" ? "bg-pay/15 text-pay" : m === "bad" ? "bg-stop/12 text-stop" : "bg-hl text-ink")} aria-label={`изменение ${delta > 0 ? "плюс" : "минус"} ${num(Math.abs(delta))}`}>
+      {delta > 0 ? "+" : "−"}
+      {num(Math.abs(delta))}
+    </span>
+  );
+}
+
+function TileLink({ link }: { link: NonNullable<Tile["link"]> }) {
+  return (
+    <button onClick={link.onClick} className="inline-flex shrink-0 items-center gap-0.5 text-[12px] font-medium text-accent underline decoration-accent/35 underline-offset-[3px] hover:decoration-accent">
+      {link.label}
+      <ArrowRight className="size-3" aria-hidden />
+    </button>
+  );
+}
+
+/** Плитка итогов: название и ссылка, значение, разбивка, полоска прогресса. На телефоне главная плитка во всю ширину, разбивка справа от значения. */
+function Stat({ label, hint, value, suffix, sub, progress, detail, tone, link, delta, flash, polarity = 0 }: Tile) {
+  return (
+    <div className={cn("flex min-w-0 flex-col border-line px-4 py-2 md:border-r md:last:border-r-0", flashClass(meaning(polarity, flash)))} title={detail}>
+      <span className="flex min-w-0 items-baseline justify-between gap-2">
+        <span className="truncate text-[12px] leading-tight text-muted-foreground">
+          {label}
+          {hint && <span className="num"><Sep />{hint}</span>}
+        </span>
+        {link && <TileLink link={link} />}
       </span>
-      <span className="mt-0.5 flex min-w-0 items-baseline gap-2">
-        <span className={cn("num shrink-0 text-[18px] font-semibold leading-tight tracking-[-0.01em]", tone === "pay" ? "text-pay" : tone === "ask" ? "text-ask" : "text-ink")}>{value}</span>
-        {delta ? (
-          <span className={cn("num shrink-0 rounded-[4px] px-1.5 text-[12px] font-semibold", chipTone === "good" ? "bg-pay/15 text-pay" : chipTone === "bad" ? "bg-stop/12 text-stop" : "bg-hl text-ink")} aria-label={`изменение ${delta > 0 ? "плюс" : "минус"} ${num(Math.abs(delta))}`}>
-            {delta > 0 ? "+" : "−"}
-            {num(Math.abs(delta))}
-          </span>
-        ) : null}
-        {link && (
-          <button onClick={link.onClick} className="inline-flex items-center gap-0.5 text-[12px] font-medium text-accent underline decoration-accent/35 underline-offset-[3px] hover:decoration-accent">
-            {link.label}
-            <ArrowRight className="size-3" aria-hidden />
-          </button>
-        )}
-        {/* в одной строке с суммой, чтобы суммы во всех плитках стояли на одном уровне; полный текст в подсказке плитки */}
-        {extra && <span className="num min-w-0 truncate text-[11.5px] text-muted-foreground">{extra}</span>}
+      <span className="mt-0.5 flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 md:flex-col md:items-start md:justify-start">
+        <span className="flex items-baseline gap-2">
+          <span className={cn("num shrink-0 text-[18px] font-semibold leading-tight tracking-[-0.01em]", tone === "pay" ? "text-pay" : tone === "ask" ? "text-ask" : "text-ink")}>{value}</span>
+          {suffix && <span className="num text-[12px] text-muted-foreground">{suffix}</span>}
+          <DeltaChip delta={delta} polarity={polarity} />
+        </span>
+        {sub && <span className="num min-w-0 truncate text-[11.5px] leading-tight text-muted-foreground md:mt-0.5 md:max-w-full">{sub}</span>}
       </span>
+      {progress !== undefined && (
+        <span className="mt-1.5 h-1 overflow-hidden rounded-full bg-line" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)} aria-label={`${label}: готово ${Math.round(progress * 100)} %`}>
+          <span className="block h-full rounded-full bg-pay transition-[width] duration-500" style={{ width: `${progress * 100}%` }} />
+        </span>
+      )}
     </div>
+  );
+}
+
+/** Строка итогов на телефоне: название слева, значение справа; подробности во всплывающей подсказке и в разделах. */
+function StatRow({ label, hint, value, sub, detail, link, delta, flash, polarity = 0 }: Tile) {
+  // суммы стоят ровной колонкой справа; уточнение у строки со ссылкой идёт слева, после названия.
+  // строка со ссылкой на подложке, как кнопка; подложка выступает на 8 px, содержимое не сдвигается
+  const body = (
+    <>
+      <span className="flex min-w-0 items-baseline truncate text-[12.5px] text-muted-foreground">
+        {label}
+        {/* строка flex: пробел в начале элемента схлопывается, поэтому отступ полем */}
+        {hint && <span className="num ml-[0.3em]">{hint}</span>}
+        {link && sub && (
+          <span className="num truncate text-[11.5px]">
+            <Sep />
+            {sub}
+          </span>
+        )}
+      </span>
+      <span className="flex shrink-0 items-baseline gap-2">
+        <DeltaChip delta={delta} polarity={polarity} />
+        <span className="num text-[14px] font-semibold text-ink">{value}</span>
+      </span>
+    </>
+  );
+  const cls = cn("flex w-full items-baseline justify-between gap-3 py-1 text-left", flashClass(meaning(polarity, flash)));
+  return (
+    <li title={detail}>
+      {link ? (
+        <button onClick={link.onClick} className={cn(cls, "-mx-2 my-0.5 w-[calc(100%+1rem)] rounded-md border border-line bg-surface-2 px-[7px] hover:border-line-strong active:bg-muted")} aria-label={`${label}: ${value}, открыть ${link.label}`}>
+          {body}
+        </button>
+      ) : (
+        <span className={cls}>{body}</span>
+      )}
+    </li>
   );
 }
