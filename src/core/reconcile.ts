@@ -76,6 +76,7 @@ const SYNONYMS: [RegExp, string][] = [
   [/короба(?![а-яё])|коробки|коробок/gi, "короб"],
   [/стретч/gi, "стрейч"],
   [/скотч[а-яё]*/gi, "лента клейкая"],
+  [/adhesive\s+tape/gi, "лента клейкая"],
 ];
 
 function matTokens(s: string) {
@@ -116,8 +117,10 @@ function resolveSupplier(ex: Extracted, orders: Order[]): { status: Result["supp
   if (ex.senderDomain === COMPANY_DOMAIN) return { status: "internal", name: ex.senderName };
   const suppliers = [...new Set(orders.map((o) => o.supplier))];
   const n = ex.senderName ? norm(ex.senderName) : null;
+  // «Плёнка Ладога» и «Плёнка-Ладога»: одно название; подмену отправителя ловит проверка домена
+  const key = (s: string) => norm(s).replace(/[\s-]+/g, "");
   if (n) {
-    const exact = suppliers.find((s) => norm(s) === n);
+    const exact = suppliers.find((s) => key(s) === key(n));
     if (exact) return { status: "known", name: exact };
     const look = suppliers.find((s) => n.includes(norm(s)) || norm(s).includes(n));
     if (look) return { status: "lookalike", name: ex.senderName, base: look };
@@ -157,8 +160,8 @@ function convertQty(ex: Extracted, o: Order): { qty: number; price: number; text
     if (innerUnit === ou) {
       const qty = count * perPack;
       const price = ex.pricePer === "pack" ? ex.price / perPack : ex.price;
-      const short = ({ мешок: "меш.", рул: "рул.", рулон: "рул.", пачка: "пач.", упаковка: "упак." } as Record<string, string>)[packUnit] ?? packUnit;
-      const one = ({ мешок: "мешок", рул: "рулон", рулон: "рулон", пачка: "пачку", упаковка: "упаковку" } as Record<string, string>)[packUnit] ?? packUnit;
+      const short = ({ мешок: "меш.", рул: "рул.", рулон: "рул.", пачка: "пач.", упаковка: "упак.", коробка: "кор." } as Record<string, string>)[packUnit] ?? packUnit;
+      const one = ({ мешок: "мешок", рул: "рулон", рулон: "рулон", пачка: "пачку", упаковка: "упаковку", коробка: "коробку" } as Record<string, string>)[packUnit] ?? packUnit;
       const text =
         `${num(count)} ${short} × ${num(perPack)} ${innerUnit} = ${num(qty)} ${ou}` +
         (ex.pricePer === "pack" ? `; ${num(ex.price)} ₽ за ${one} ÷ ${num(perPack)} = ${num(round2(price))} ₽/${ou}` : "");
@@ -168,6 +171,12 @@ function convertQty(ex: Extracted, o: Order): { qty: number; price: number; text
     return null;
   }
   if (ex.unit === ou || (ex.unit === "рулон" && ou === "рул")) return { qty: ex.qty, price: ex.price, text: null };
+  // тонны в счёте, килограммы в заказе: «0,2 т по 180 000 руб. за тонну»
+  if (ex.unit === "т" && ou === "кг") {
+    const qty = round2(ex.qty * 1000);
+    const price = ex.price / 1000;
+    return { qty, price, text: `${num(ex.qty)} т = ${num(qty)} кг; ${num(ex.price)} ₽ за тонну ÷ 1 000 = ${num(round2(price))} ₽/кг` };
+  }
   return null;
 }
 
@@ -191,6 +200,13 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
   // Сначала все счета (в порядке поступления), затем письма-контекст: так письмо
   // о реквизитах влияет на счёт, даже если пришло раньше него.
   const exs = letters.map((l) => ({ l, ex: extractor(l.text, l.sender) }));
+  // Домен, с которого поставщик написал первым (П-2): письмо от того же названия с другого домена
+  // («lentaprom-pay.example» вместо «lentaprom.example») считаем подменой отправителя.
+  const firstDomain = new Map<string, string>();
+  for (const { ex } of exs) {
+    const s = resolveSupplier(ex, orders);
+    if (s.status === "known" && ex.senderDomain && !firstDomain.has(s.name!)) firstDomain.set(s.name!, ex.senderDomain);
+  }
   const invoices = exs.filter((x) => x.ex.kind !== "letter");
   const notes = exs.filter((x) => x.ex.kind === "letter");
 
@@ -252,7 +268,9 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
     }
 
     // --- 1. Поставщик и реквизиты (П-2)
-    if (sup.status === "lookalike" || (sup.status === "known" && ex.requisitesChange)) {
+    const homeDomain = sup.status === "known" ? firstDomain.get(sup.name!) : undefined;
+    const foreignDomain = !!(homeDomain && ex.senderDomain && ex.senderDomain !== homeDomain);
+    if (sup.status === "lookalike" || (sup.status === "known" && (ex.requisitesChange || foreignDomain))) {
       const baseSupplier = sup.base ?? sup.name!;
       const probable = ex.orderNo ? orders.find((o) => o.id === ex.orderNo) ?? null : bindByAttributes(baseSupplier, ex, orders).order;
       r.orderId = probable?.id ?? null;
@@ -270,10 +288,17 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
         if (ex.senderDomain && knownDomains.length && !knownDomains.includes(ex.senderDomain))
           r.findings.push({ rule: "П-2", level: "stop", text: `Почта с другого домена: ${ex.senderDomain}; «${baseSupplier}» писал с ${knownDomains.join(", ")}.` });
       }
+      if (foreignDomain)
+        r.findings.push({ rule: "П-2", level: "stop", text: `Название как у поставщика, но почта с другого домена: ${ex.senderDomain}; «${baseSupplier}» пишет с ${homeDomain}. Признак подмены отправителя.` });
       if (ex.requisitesChange)
         r.findings.push({ rule: "П-2", level: "stop", text: "Просят платить по новым реквизитам. Подписанного допсоглашения о смене получателя в Directum RX нет." });
-      r.brief = sup.status === "lookalike" ? "Похожее юрлицо, новые реквизиты" : "Новые реквизиты без допсоглашения";
-      r.headline = sup.status === "lookalike" ? "Счёт от другого юрлица с похожим названием и новыми реквизитами: признаки подмены получателя" : "Счёт с новыми реквизитами без допсоглашения";
+      r.brief = sup.status === "lookalike" ? "Похожее юрлицо, новые реквизиты" : ex.requisitesChange ? "Новые реквизиты без допсоглашения" : "Чужой домен почты";
+      r.headline =
+        sup.status === "lookalike"
+          ? "Счёт от другого юрлица с похожим названием и новыми реквизитами: признаки подмены получателя"
+          : ex.requisitesChange
+            ? "Счёт с новыми реквизитами без допсоглашения"
+            : `Счёт от имени «${baseSupplier}», но с чужого домена ${ex.senderDomain}: признак подмены отправителя`;
       if (ex.total) r.prevented.push({ category: "fraud", amount: ex.total });
       addAddr(r, buyerOf(probable, "проверить, кто выставил счёт"));
       addAddr(r, { role: "cfo", name: CFO, reason: "смена получателя платежа (П-2)" });
@@ -410,12 +435,16 @@ export function reconcileAll(data: CaseData, letters: Letter[] = data.letters, e
 
     // --- 7. Арифметика итога (П-8)
     let arithmeticError = false;
-    const calc = round2(ex.qty! * ex.price!);
+    // в единицах заказа: «20 рулонов по 15 кг, цена 210 руб. за кг» это 300 кг × 210, а не 20 × 210
+    const calc = round2(conv.qty * conv.price);
     if (ex.total !== null && Math.abs(calc - ex.total) > EPS) {
       arithmeticError = true;
-      r.findings.push({ rule: "П-8", level: "return", text: `${num(ex.qty!)} × ${num(ex.price!)} = ${rub(calc)}, а в счёте итог ${rub(ex.total)}.`, short: `ошибка в итоге на ${rub(round2(Math.abs(ex.total - calc)))}` });
+      r.findings.push({ rule: "П-8", level: "return", text: `${num(conv.qty)} × ${num(round2(conv.price))} = ${rub(calc)}, а в счёте итог ${rub(ex.total)}.`, short: `ошибка в итоге на ${rub(round2(Math.abs(ex.total - calc)))}` });
       if (ex.total > calc) r.prevented.push({ category: "arithmetic", amount: round2(ex.total - calc) });
       addAddr(r, { role: "supplier", name: sup.name!, email: ex.senderEmail ?? undefined, reason: "исправить итог счёта" });
+    } else if (ex.total === null && /итог|всего|к\s+оплате/i.test(l.text)) {
+      // итог в счёте есть, но не прочитан («со скидкой», прописью): платить посчитанную самими сумму нельзя
+      r.findings.push({ rule: "П-8", level: "ask", text: `Итог в счёте не удалось прочитать, сверить его с ${num(conv.qty)} × ${num(round2(conv.price))} = ${rub(calc)} нельзя. Проверьте итог вручную.`, short: "итог не прочитан" });
     }
 
     // --- 8. Цена с учётом согласований (П-6)

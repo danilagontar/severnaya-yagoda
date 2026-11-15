@@ -5,7 +5,8 @@ import type { Extracted, FieldKey, LetterTopic, Packaging, Span } from "./types"
 
 export const COMPANY_DOMAIN = "sev-yagoda.example";
 
-const NUM_PLAIN = String.raw`\d[\d   ]*(?:[.,]\d+)?`;
+// разделители тысяч: пробелы (в т.ч. неразрывные) и апостроф «22'800» (бухгалтерские выгрузки)
+const NUM_PLAIN = String.raw`\d(?:[\d \u00a0\u202f]|['’](?=\d{3}))*(?:[.,]\d+)?`;
 const RUB = String.raw`(?:руб(?:\.|лей|ля)?|₽|р\.)`;
 
 // «15.000,00»: тысячи через точку (ровно по три цифры), иначе обычная запись: «15 000,00», «4.40»
@@ -13,7 +14,7 @@ const NUM = String.raw`(?:\d{1,3}(?:\.\d{3})+(?:,\d+)?(?![\d.])|${NUM_PLAIN})`;
 
 export function parseNum(s: string): number {
   if (/^\d{1,3}(?:\.\d{3})+(?:,\d+)?$/.test(s.trim())) return Number(s.trim().replace(/\./g, "").replace(",", "."));
-  return Number(s.replace(/[   ]/g, "").replace(",", "."));
+  return Number(s.replace(/[ \u00a0\u202f'’]/g, "").replace(",", "."));
 }
 
 export function normUnit(u: string): string | null {
@@ -24,11 +25,24 @@ export function normUnit(u: string): string | null {
   if (/^меш/.test(s)) return "мешок";
   if (/^пач/.test(s)) return "пачка";
   if (/^упак/.test(s)) return "упаковка";
+  if (/^т(?:онн|$)/.test(s)) return "т";
+  // «бобина» у риббона и ленты: тот же рулон; «ед.», «единиц»: штуки
+  if (/^бобин/.test(s)) return "рул";
+  if (/^ед(?:$|иниц)/.test(s)) return "шт";
+  if (/^короб/.test(s)) return "коробка";
+  // английские счета: «240 rolls», «500 pcs»
+  if (/^rolls?$/.test(s)) return "рул";
+  if (/^(?:pcs|pieces?|units?)$/.test(s)) return "шт";
+  if (/^kgs?$/.test(s)) return "кг";
   return null;
 }
 
-const UNIT_RE = String.raw`(шт(?:ук|\.)?|кг|килограмм[а-яё]*|рул(?:онов|она|он|\.)?|мешк[а-яё]*|мешок|пач(?:ек|ки|ка)|упаков[а-яё]*)`;
-const PACK_RE = String.raw`(мешк[а-яё]*|мешок|рулон[а-яё]*|рул\.?|пач(?:ек|ки|ка)|упаков[а-яё]*)`;
+const UNIT_RE = String.raw`(шт(?:ук|\.)?|кг|килограмм[а-яё]*|рул(?:онов|она|он|\.)?|бобин[а-яё]*|ед\.|единиц[а-яё]*|мешк[а-яё]*|мешок|пач(?:ек|ки|ка)|упаков[а-яё]*|тонн[а-яё]*|т\.?|rolls?|pcs|pieces?|kgs?)`;
+// пропись в скобках между числом и единицей: «240 (двести сорок) рулонов»
+const WORDS_RE = String.raw`(?:\([^)\d]{1,60}\)\s*)?`;
+// «6 тыс. шт.», «22,8 тыс. руб.»: множитель между числом и единицей
+const THOUSAND_RE = String.raw`(тыс\.?\s*|тысяч[а-яё]*\s+)?`;
+const PACK_RE = String.raw`(мешк[а-яё]*|мешок|рулон[а-яё]*|рул\.?|пач(?:ек|ки|ка)|упаков[а-яё]*|коробк[а-яё]*|коробок)`;
 
 function span(m: RegExpExecArray, group = 0): Span {
   const start = m.index + (group ? m[0].indexOf(m[group]) : 0);
@@ -38,7 +52,11 @@ function span(m: RegExpExecArray, group = 0): Span {
 export function parseSender(sender: string): { name: string | null; email: string | null; domain: string | null } {
   const email = sender.match(/[\w.+-]+@[\w.-]+\.\w+/)?.[0] ?? null;
   const quoted = sender.match(/«([^»]+)»/)?.[1] ?? sender.match(/"([^"]+)"/)?.[1] ?? null;
-  const name = quoted ?? (sender.split(",")[0].trim() || null);
+  // «Лентапром (бухгалтерия) <schet@…>»: убираем адрес в угловых скобках и пояснение в круглых
+  const bare = sender.replace(/<[^>]*>/g, "").replace(/\([^)]*\)/g, "").split(",")[0].trim();
+  const raw = quoted ?? (bare || null);
+  // «Лeнтапром» с латинской e: сравниваем с поставщиками по русскому написанию
+  const name = raw ? fixHomoglyphs(raw).trim() : null;
   return { name: name && !name.includes("@") ? name : null, email, domain: email ? email.split("@")[1].toLowerCase() : null };
 }
 
@@ -51,7 +69,8 @@ export function fixHomoglyphs(t: string): string {
 
 // «счёт 45», «счет № 0202», «Сч. 45», «счет номер 202», «счёт-фактура 12».
 // Не «по счёту 205» (ссылка), не «расчётный счёт 40702…» и не 20-значный номер банковского счёта.
-const INV_RE = String.raw`(?<!по\s)(?<!расч[её]тн[а-яё]*\s+)(?<![а-яё\/])(сч[её]т(?:а|ов|-фактур[а-яё]*)?|сч\.)\s*(?:№|номер)?\s*(\d{1,10}(?:\/\d+)?)(?![\d\/])`;
+// «Счёт на оплату № 52», «счёт на предоплату 89», «счёт-оферта 33», «invoice 52».
+const INV_RE = String.raw`(?<!по\s)(?<!расч[её]тн[а-яё]*\s+)(?<![а-яё\/])(сч[её]т(?:а|ов|-фактур[а-яё]*|-оферт[а-яё]*)?|сч\.|invoice)(?:\s+на\s+(?:пред)?оплату)?\s*(?:№|N[o°]?\.?|номер|#)?\s*(\d{1,10}(?:\/\d+)?)(?![\d\/])`;
 const stripZeros = (n: string) => n.replace(/^0+(?=\d)/, "");
 
 /** Все номера счетов в тексте: первый: основной, остальные: «ещё счета в этом письме». */
@@ -73,6 +92,62 @@ function invoiceNumbers(text: string): { no: string; m: RegExpExecArray }[] {
     }
   }
   return out;
+}
+
+interface TableRow {
+  material: string | null;
+  qty: number | null;
+  unit: string | null;
+  price: number | null;
+  spans: Partial<Record<"material" | "qty" | "price", Span>>;
+}
+
+/** Первая строка товара под заголовком таблицы (колонки через табуляцию или «|»). */
+function readTable(text: string): TableRow | null {
+  const lines = text.split("\n");
+  let pos = 0;
+  for (let i = 0; i < lines.length - 1; i++) {
+    const line = lines[i];
+    const sep = line.includes("\t") ? "\t" : line.includes("|") ? "|" : null;
+    const head = sep ? line.split(sep).map((c) => c.trim().toLowerCase()) : [];
+    const col = (re: RegExp) => head.findIndex((c) => re.test(c));
+    const iQty = col(/^кол(?:-во|ичество)/);
+    const iPrice = col(/^цена/);
+    if (!sep || iQty < 0 || iPrice < 0) {
+      pos += line.length + 1;
+      continue;
+    }
+    const iName = col(/^(?:наименование|товар|материал)/);
+    const iUnit = col(/^ед/);
+    const rowAt = pos + line.length + 1;
+    const cells = lines[i + 1].split(sep);
+    // смещение каждой ячейки в тексте: для подсветки
+    const offs: number[] = [];
+    let o = rowAt;
+    for (const c of cells) {
+      offs.push(o);
+      o += c.length + 1;
+    }
+    const cell = (k: number) => (k >= 0 && cells[k] !== undefined ? cells[k].trim() : "");
+    const cspan = (k: number): Span | undefined => {
+      if (k < 0 || cells[k] === undefined) return undefined;
+      const lead = cells[k].length - cells[k].trimStart().length;
+      return { start: offs[k] + lead, end: offs[k] + lead + cells[k].trim().length };
+    };
+    const n = (s: string) => (new RegExp(String.raw`^${NUM}$`).test(s) ? parseNum(s) : null);
+    const qty = n(cell(iQty));
+    const unit = iUnit >= 0 ? normUnit(cell(iUnit)) : null;
+    const price = n(cell(iPrice));
+    if (qty === null || price === null || !unit) return null;
+    return {
+      material: cell(iName) || null,
+      qty,
+      unit,
+      price,
+      spans: { material: cspan(iName), qty: cspan(iQty), price: cspan(iPrice) },
+    };
+  }
+  return null;
 }
 
 function extractPart(raw: string, sender: string): Extracted {
@@ -103,7 +178,7 @@ function extractPart(raw: string, sender: string): Extracted {
   // --- заказ
   let orderNo: string | null = null;
   // «ЗП-08», «ЗП08», опечатки «3П-06» (цифра 3) и «ЗП-О8» (буква О вместо нуля)
-  const ord = /(?<![\dа-яё])[З3]П\s*-?\s*([\dОO]{1,3})(?![\dа-яё])/i.exec(text);
+  const ord = /(?<![\dа-яёa-z])(?:[З3]П|ZP)\s*-?\s*([\dОO]{1,3})(?![\dа-яё])/i.exec(text);
   if (ord && /\d/.test(ord[1])) {
     orderNo = "ЗП-" + ord[1].replace(/[ОO]/gi, "0").padStart(2, "0");
     spans.orderNo = span(ord);
@@ -129,11 +204,13 @@ function extractPart(raw: string, sender: string): Extracted {
   let price: number | null = null;
   let pricePer: "unit" | "pack" | null = null;
   let priceIdx = -1;
-  const pc = new RegExp(String.raw`цена\s*(мешка|рулона|пачки|упаковки|за\s+\S+)?\s*[:—-]?\s*(${NUM})\s*${RUB}`, "i").exec(text);
-  const pp = new RegExp(String.raw`по\s+(${NUM})\s*${RUB}`, "i").exec(text);
+  const pc = new RegExp(String.raw`цена\s*(мешка|рулона|пачки|упаковки|коробки|за\s+\S+)?\s*[:—-]?\s*(${NUM})\s*${RUB}`, "i").exec(text);
+  const pp = new RegExp(String.raw`(?:по|at)\s+(${NUM})\s*(?:${RUB}|RUB|rub)`, "i").exec(text);
+  // «240 рул. × 95 р.», «180 руб./кг»: цена за единицу без слов «цена» и «по»
+  const px = new RegExp(String.raw`[×*]\s*(${NUM})\s*${RUB}|(?<![\d,.])(${NUM})\s*${RUB}\s*\/\s*(?:кг|шт|рул)`, "i").exec(text);
   if (pc) {
     price = parseNum(pc[2]);
-    pricePer = pc[1] && /мешка|рулона|пачки|упаковки/i.test(pc[1]) ? "pack" : "unit";
+    pricePer = pc[1] && /мешка|рулона|пачки|упаковки|коробки/i.test(pc[1]) ? "pack" : "unit";
     spans.price = span(pc);
     priceIdx = pc.index;
   } else if (pp) {
@@ -141,13 +218,18 @@ function extractPart(raw: string, sender: string): Extracted {
     pricePer = "unit";
     spans.price = span(pp);
     priceIdx = pp.index;
+  } else if (px) {
+    price = parseNum(px[1] ?? px[2]);
+    pricePer = "unit";
+    spans.price = span(px);
+    priceIdx = px.index;
   }
 
   // --- количество (если не фасовка): ближайшее к цене упоминание «N ед.»
   let qty: number | null = pack ? pack.count : null;
   let unit: string | null = pack ? pack.packUnit : null;
   if (!pack) {
-    const re = new RegExp(String.raw`(?<![\d×хx*])(${NUM})\s*${UNIT_RE}(?![а-яё])`, "gi");
+    const re = new RegExp(String.raw`(?<![\d×хx*])(${NUM})\s*${WORDS_RE}${THOUSAND_RE}${UNIT_RE}(?![а-яёa-z])`, "gi");
     const all = [...text.matchAll(re)];
     let best: RegExpMatchArray | null = null;
     for (const m of all) {
@@ -156,22 +238,42 @@ function extractPart(raw: string, sender: string): Extracted {
     }
     if (!best && all.length) best = all[all.length - 1];
     if (best) {
-      qty = parseNum(best[1]);
-      unit = normUnit(best[2]);
+      qty = parseNum(best[1]) * (best[2] ? 1000 : 1);
+      unit = normUnit(best[3]);
       qtyStart = best.index ?? -1;
       spans.qty = { start: qtyStart, end: qtyStart + best[0].length };
     }
   }
-  if (pack && pricePer === "unit" && price !== null && spans.price && /цена\s+(мешка|рулона|пачки)/i.test(text)) pricePer = "pack";
+  if (pack && pricePer === "unit" && price !== null && spans.price && /цена\s+(мешка|рулона|пачки|коробки)/i.test(text)) pricePer = "pack";
+
+  // --- счёт таблицей: строка заголовка «Наименование | Кол-во | Ед. | Цена | Сумма» через табуляцию или «|»
+  const table = readTable(text);
+  if (table) {
+    if (qty === null && table.qty !== null) {
+      qty = table.qty;
+      unit = table.unit;
+      spans.qty = table.spans.qty;
+    }
+    if (price === null && table.price !== null) {
+      price = table.price;
+      pricePer = "unit";
+      spans.price = table.spans.price;
+    }
+  }
 
   // --- итог
   let total: number | null = null;
   const tt =
     // «Итого 120 руб.», «Итого к оплате: 120 руб.», «К оплате 130 руб.», «120 (сто двадцать) руб.»
-    new RegExp(String.raw`(?:(?:итого|всего)(?:\s+к\s+оплате)?|к\s+оплате|сумма(?:\s+сч[её]та)?|на\s+сумму)\s*:?\s*(${NUM})\s*(?:\([^)\d]{1,80}\)\s*)?${RUB}`, "i").exec(text) ??
-    new RegExp(String.raw`(?<![а-яё\w])на\s+(${NUM})\s*${RUB}`, "i").exec(text);
+    // «Итого с учётом скидки 5%: 21 660 руб.», «Итого 22,8 тыс. руб.»
+    new RegExp(String.raw`(?:(?:итого|всего)(?:\s+к\s+оплате)?|к\s+оплате|сумма(?:\s+сч[её]та)?|на\s+сумму)(?:\s+с\s+уч[её]том\s+скидк[а-яё]*(?:\s+\d+(?:[.,]\d+)?\s*%)?)?\s*:?\s*(${NUM})\s*${THOUSAND_RE}(?:\([^)\d]{1,80}\)\s*)?${RUB}`, "i").exec(text) ??
+    new RegExp(String.raw`(?<![а-яё\w])на\s+(${NUM})\s*${THOUSAND_RE}${RUB}`, "i").exec(text) ??
+    // «Итого: ₽22 800» (знак рубля перед числом), «= 22 800 р.» (запись формулой), «Total 22 800 RUB»
+    new RegExp(String.raw`(?:итого|всего|к\s+оплате)\s*:?\s*₽\s*(${NUM})()`, "i").exec(text) ??
+    new RegExp(String.raw`=\s*(${NUM})\s*${THOUSAND_RE}${RUB}`, "i").exec(text) ??
+    new RegExp(String.raw`total\s*:?\s*(${NUM})\s*()(?:RUB|rub|₽|руб)`, "i").exec(text);
   if (tt) {
-    total = parseNum(tt[1]);
+    total = Math.round(parseNum(tt[1]) * (tt[2] ? 1000 : 1) * 100) / 100;
     spans.total = span(tt);
   }
 
@@ -182,6 +284,9 @@ function extractPart(raw: string, sender: string): Extracted {
   if (labeled) {
     material = labeled[1].trim();
     spans.material = span(labeled, 1);
+  } else if (table?.material) {
+    material = table.material;
+    spans.material = table.spans.material;
   }
   if (!material && qtyStart > 0) {
     const head = text.slice(0, qtyStart);
@@ -213,16 +318,31 @@ function extractPart(raw: string, sender: string): Extracted {
       if (at >= 0) spans.material = { start: at, end: at + mat.length };
     }
   }
+  // «Итого 22 800 руб. за 240 рул. ленты клейкой 48 мм × 66 м по 95 руб.»: материал после количества
+  if (!material && spans.qty) {
+    const after = /^\s*([^,.;:\n]*?[а-яё]{3,}[^,;:\n]*?)(?=\s+по\s|\s*[,;:\n]|\.\s|\.?$)/i.exec(text.slice(spans.qty.end));
+    if (after && after[1].trim().length < 120) {
+      material = after[1].trim();
+      const at = text.indexOf(material, spans.qty.end);
+      if (at >= 0) spans.material = { start: at, end: at + material.length };
+    }
+  }
 
   const batch = text.match(/(перв|втор|трет)[а-яё]*\s+парти[а-яё]*/i)?.[0] ?? null;
 
   // --- признаки
   // Только смена получателя или банка. Просто слово «реквизиты» («реквизиты указаны в счёте»,
-  // «реквизиты прежние») сменой не является.
-  const rq =
-    /(?:нов|друг)[а-яё]*\s+(?:банковск[а-яё]*\s+|платёжн[а-яё]*\s+|платежн[а-яё]*\s+)?реквизит|реквизит[а-яё]*\s+(?:изменил|сменил|поменял|обновил)[а-яё]*|(?:смен[аеуы]|изменени[еяю])\s+(?:банковск[а-яё]*\s+)?реквизит|(?:нов|друг)[а-яё]*\s+расч[её]тн[а-яё]*\s+сч[её]т|р\/с\s*\d|сменил[а-яё]*\s+банк|нов[а-яё]*\s+банк|от\s+другой\s+(?:фирмы|организации|компании)/i.exec(
+  // «реквизиты прежние») и номер р/с в подвале счёта сменой не являются.
+  const rqFound =
+    /(?:нов|друг)[а-яё]*\s+(?:банковск[а-яё]*\s+|платёжн[а-яё]*\s+|платежн[а-яё]*\s+)?реквизит|реквизит[а-яё]*\s+(?:изменил|сменил|поменял|обновил)[а-яё]*|(?:смен[аеуы]|изменени[еяю])\s+(?:банковск[а-яё]*\s+)?реквизит|(?:нов|друг)[а-яё]*\s+(?:расч[её]тн[а-яё]*\s+сч[её]т|р\/с)|сменил[а-яё]*\s+банк|(?:нов|друг)[а-яё]*\s+банк|от\s+другой\s+(?:фирмы|организации|компании)|на\s+(?:р\/с|сч[её]т)\s+(?:наш[а-яё]*\s+)?(?:партн[её]р|друг[а-яё]*\s+(?:организац|компани|фирм)|треть)|в\s+пользу\s+(?:ООО|АО|ИП|друг|треть)|(?:перевод[а-яё]*\s+)?на\s+(?:личн[а-яё]*\s+|банковск[а-яё]*\s+)?карт[уыеа](?![а-яё])|номер\s+карты|(?:оплат[а-яё]*|платеж[а-яё]*|платёж[а-яё]*|деньги)\s+(?:теперь\s+|с\s+\d{1,2}\.\d{1,2}\s+)?принима[а-яё]*\s+(?:ООО|АО|ИП|друг|нов|треть)|сч[её]та\s+(?:теперь\s+)?выставля[а-яё]*\s+(?:ООО|АО|ИП)/i.exec(
       text,
     );
+  // «наши реквизиты не менялись», «расчётный счёт прежний»: отрицание смены, если нового номера счёта не дают
+  // (предупреждение о мошенниках упоминает «письма о смене реквизитов», но само сменой не является)
+  const rqDenied =
+    /(?:реквизит[а-яё]*|расч[её]тн[а-яё]*\s+сч[её]т|р\/с|банк)[^.!\n]{0,20}?\s(?:не\s+(?:менял|изменил|поменял)[а-яё]*|прежн[а-яё]*|т(?:е|от)\s+же|остал[а-яё]*\s+прежн)|не\s+(?:менял|изменил|поменял)[а-яё]*\s+(?:реквизит|банк|расч)/i.test(text) &&
+    !/(?:нов|друг)[а-яё]*\s+(?:реквизит|расч[её]тн|р\/с|банк)[^.]{0,60}\d{20}/i.test(text);
+  const rq = rqDenied ? null : rqFound;
   if (rq) spans.requisites = span(rq);
   const rs = /повторно|копи[яюи]\s+сч[её]т|дубликат/i.exec(text);
   if (rs) spans.resend = span(rs);
@@ -232,7 +352,8 @@ function extractPart(raw: string, sender: string): Extracted {
   if (pr) spans.promise = span(pr);
 
   const isBuyerNote = s.domain === COMPANY_DOMAIN;
-  const isCorrection = /исправленн/i.test(text);
+  // «исправленный», «исправлен» (глагол), «скорректированный», «corrected invoice»
+  const isCorrection = /исправлен|скорректирован|откорректирован|\bcorrected\b/i.test(text);
   const hasMoney = total !== null || (qty !== null && price !== null);
 
   let kind: Extracted["kind"];
