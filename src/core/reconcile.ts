@@ -340,6 +340,12 @@ export function reconcileAll(
       }
     }
 
+    // --- 0б. Счёт не в рублях: цены в кейсе в рублях без налогов (П-8), сверить нельзя
+    if (ex.currency) {
+      r.findings.push({ rule: "П-8", level: "ask", short: "счёт не в рублях", text: `Счёт в ${ex.currency}, а цены заказа в рублях. Сверить нельзя: нужен счёт в рублях.` });
+      addAddr(r, { role: "supplier", name: sup.name ?? ex.senderName ?? "Поставщик", email: ex.senderEmail ?? undefined, reason: "прислать счёт в рублях" });
+    }
+
     // --- 1. Поставщик и реквизиты (П-2)
     const homeDomain = sup.status === "known" ? firstDomain.get(sup.name!) : undefined;
     const foreignDomain = !!(homeDomain && ex.senderDomain && ex.senderDomain !== homeDomain);
@@ -507,7 +513,12 @@ export function reconcileAll(
       r.findings.push({ rule: "П-7", level: "ask", text: `Материал в счёте («${ex.material ?? "не указан"}») не похож на материал заказа («${order.material}»).`, short: "материал не как в заказе", source: order.id });
 
     // --- 6. Пересчёт в единицы заказа (П-7)
-    const conv = convertQty(ex, order);
+    const conv0 = convertQty(ex, order);
+    // «скидка 5%»: цена в счёте до скидки. Берём цену со скидкой, только если итог сходится именно с ней
+    const disc = ex.discountPct && conv0 && ex.total !== null ? round2(conv0.qty * conv0.price * (1 - ex.discountPct / 100)) : null;
+    const conv = conv0 && disc !== null && Math.abs(disc - ex.total!) < EPS && Math.abs(conv0.qty * conv0.price - ex.total!) > EPS ? { ...conv0, price: conv0.price * (1 - ex.discountPct! / 100) } : conv0;
+    if (conv && conv0 && conv !== conv0)
+      r.findings.push({ rule: "П-8", level: "info", text: `Скидка ${num(ex.discountPct!)} %: цена ${num(round2(conv0.price))} ₽ со скидкой ${num(round2(conv.price))} ₽, итог ${rub(ex.total)} сходится.` });
     if (!conv) {
       r.verdict = "ask";
       r.headline = "Не удалось пересчитать количество в единицы заказа";
@@ -723,6 +734,11 @@ export function reconcileAll(
     const order = orders.find((o) => o.id === r.orderId) ?? null;
     const tIds = targets.map((t) => t.id).join(", ");
 
+    // вопрос о дате или факте оплаты в письме без счёта: казначею (П-9)
+    if (ex.asksPaymentDate && ex.topic !== "buyer-note") {
+      addAddr(r, { role: "treasurer", name: TREASURER, reason: tIds ? `дата и факт оплаты по ${tIds}` : "дата и факт оплаты" });
+      r.findings.push({ rule: "П-9", level: "info", text: `Поставщик спрашивает об оплате${tIds ? ` по ${tIds}` : ""}: ответ у казначея.` });
+    }
     // поставщик пишет, что поставка уже принята, а в ERP её нет: вопрос складу (П-9)
     if (DELIVERED.test(l.text))
       for (const t of targets.filter((x) => x.findings.some((f) => f.rule === "П-4" && f.level === "ask"))) {

@@ -1,9 +1,10 @@
-// Прогон 50 писем с ловушками (trap-letters.ts): каждое письмо отдельно поверх исходных 25.
+// Прогон писем с ловушками (три партии по 50): каждое письмо отдельно поверх исходных 25.
 import { describe, expect, it } from "vitest";
 import data from "../data/case.json";
 import { reconcileAll } from "./reconcile";
 import { TRAP_LETTERS, type TrapLetter } from "./trap-letters";
 import { TRAP_LETTERS_2 } from "./trap-letters-2";
+import { TRAP_LETTERS_3 } from "./trap-letters-3";
 import type { CaseData, Letter, Result } from "./types";
 
 const D = data as CaseData;
@@ -30,7 +31,7 @@ export function trapProblems(t: TrapLetter, r: Result, get: (id: string) => Resu
 }
 
 describe("письма с ловушками", () => {
-  for (const t of [...TRAP_LETTERS, ...TRAP_LETTERS_2]) {
+  for (const t of [...TRAP_LETTERS, ...TRAP_LETTERS_2, ...TRAP_LETTERS_3]) {
     it(`${t.id} ${t.group}: ${t.trap}`, () => {
       const { r, get } = runTrap(t);
       expect(trapProblems(t, r, get), `ядро: ${r.verdict}, ${r.headline}`).toEqual([]);

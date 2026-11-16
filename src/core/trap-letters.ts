@@ -152,7 +152,8 @@ export const TRAP_LETTERS: TrapLetter[] = [
     expect: { verdict: ["pay"], payNow: 22800 } },
   { id: "Л-36", group: "Суммы", trap: "Скидка в итоге: итог ≠ количество × цена", sender: LP,
     text: `Исправленный счёт 52 по ЗП-08: ${LP52} Итого с учётом скидки 5%: 21 660 руб.`,
-    expect: { verdict: ["return", "ask"], check: noMoney } },
+    // с 16.11.2026 скидка учитывается: итог = 240 × 95 со скидкой 5 % = 21 660, это не ошибка в итоге (П-8), платим меньше заказа
+    expect: { verdict: ["pay", "return", "ask"], check: (r) => (r.verdict === "pay" && r.payNow !== 21660 ? `к оплате ${r.payNow}, ожидалось 21 660` : null) } },
   { id: "Л-37", group: "Суммы", trap: "Апостроф как разделитель тысяч: 22'800", sender: LP,
     text: `Исправленный счёт 52 по ЗП-08: ${LP52} Итого 22'800 руб.`,
     expect: { verdict: ["pay"], payNow: 22800 } },

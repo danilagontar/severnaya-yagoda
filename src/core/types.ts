@@ -118,6 +118,8 @@ export interface Extracted {
   total: number | null;
   batch: string | null;
   requisitesChange: boolean;
+  currency?: string | null; // не рубли: USD, EUR, CNY
+  discountPct?: number | null; // «скидка 5%»: цена в счёте до скидки
   resend: boolean;
   approvalClaim: string | null; // «по допсоглашению от 12.11», «по новому прайсу»…
   approvalClaimDate: string | null; // ДД.ММ

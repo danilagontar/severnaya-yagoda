@@ -136,7 +136,12 @@ const CRITICAL = new Set<CrossField["key"]>(["orderNo", "qty", "pack", "price", 
 
 /** Сравнение по полям. Числа LLM, которых нет в тексте письма, отклоняются. */
 export function compareExtractions(text: string, base: Extracted, llm: Record<string, any>, model: string): CrossCheck {
-  const textNums = (text.match(/\d[\d\u00a0\u202f ]*(?:[.,]\d+)?/g) ?? []).map((x) => Number(x.replace(/[\u00a0\u202f ]/g, "").replace(",", ".")));
+  // \u0447\u0438\u0441\u043b\u0430 \u043f\u0438\u0441\u044c\u043c\u0430: \u00ab&nbsp;\u00bb \u043a\u0430\u043a \u043f\u0440\u043e\u0431\u0435\u043b; \u00ab6 \u0442\u044b\u0441.\u00bb \u0437\u0430\u0441\u0447\u0438\u0442\u044b\u0432\u0430\u0435\u043c \u0438 \u043a\u0430\u043a 6, \u0438 \u043a\u0430\u043a 6 000
+  const plain = text.replace(/&nbsp;/gi, " ");
+  const textNums = [...plain.matchAll(/(\d[\d\u00a0\u202f ]*(?:[.,]\d+)?)(\s*\u0442\u044b\u0441)?/gi)].flatMap((m) => {
+    const n = Number(m[1].replace(/[\u00a0\u202f ]/g, "").replace(",", "."));
+    return m[2] ? [n, Math.round(n * 100000) / 100] : [n];
+  });
   const inText = (n: unknown) => typeof n === "number" && textNums.some((t) => Math.abs(t - n) < 1e-9);
   const fmt = (n: number | null | undefined) => (n === null || n === undefined ? null : n.toLocaleString("ru-RU", { maximumFractionDigits: 2 }));
   const normOrder = (o: unknown) => normOrderNo(o);

@@ -6,7 +6,7 @@ import type { Extracted, FieldKey, LetterTopic, Packaging, Span } from "./types"
 export const COMPANY_DOMAIN = "sev-yagoda.example";
 
 // разделители тысяч: пробелы (в т.ч. неразрывные) и апостроф «22'800» (бухгалтерские выгрузки)
-const NUM_PLAIN = String.raw`\d(?:[\d \u00a0\u202f]|['’](?=\d{3}))*(?:[.,]\d+)?`;
+const NUM_PLAIN = String.raw`\d(?:[\d \u00a0\u202f]|['’](?=\d{3}))*(?:[.,]\d+|-\d{2}(?=\s*(?:руб|р\.|₽)))?`; // «95-00 руб.»: копейки через дефис
 const RUB = String.raw`(?:руб(?:\.|лей|ля)?|₽|р\.)`;
 
 // «15.000,00»: тысячи через точку (ровно по три цифры), иначе обычная запись: «15 000,00», «4.40»
@@ -14,7 +14,7 @@ const NUM = String.raw`(?:\d{1,3}(?:\.\d{3})+(?:,\d+)?(?![\d.])|${NUM_PLAIN})`;
 
 export function parseNum(s: string): number {
   if (/^\d{1,3}(?:\.\d{3})+(?:,\d+)?$/.test(s.trim())) return Number(s.trim().replace(/\./g, "").replace(",", "."));
-  return Number(s.replace(/[ \u00a0\u202f'’]/g, "").replace(",", "."));
+  return Number(s.replace(/[ \u00a0\u202f'’]/g, "").replace(/-(\d{2})$/, ".$1").replace(",", "."));
 }
 
 export function normUnit(u: string): string | null {
@@ -70,7 +70,7 @@ export function fixHomoglyphs(t: string): string {
 // «счёт 45», «счет № 0202», «Сч. 45», «счет номер 202», «счёт-фактура 12».
 // Не «по счёту 205» (ссылка), не «расчётный счёт 40702…» и не 20-значный номер банковского счёта.
 // «Счёт на оплату № 52», «счёт на предоплату 89», «счёт-оферта 33», «invoice 52».
-const INV_RE = String.raw`(?<!по\s)(?<!расч[её]тн[а-яё]*\s+)(?<![а-яё\/])(сч[её]т(?:а|ов|-фактур[а-яё]*|-оферт[а-яё]*)?|сч\.|invoice)(?:\s+на\s+(?:пред)?оплату)?\s*(?:№|N[o°]?\.?|номер|#)?\s*(\d{1,10}(?:\/\d+)?)(?![\d\/])`;
+const INV_RE = String.raw`(?<!по\s)(?<!расч[её]тн[а-яё]*\s+)(?<![а-яё\/])(сч[её]т(?:а|ов|-фактур[а-яё]*|-оферт[а-яё]*)?|сч\.|invoice)(?:\s+на\s+(?:пред)?оплату)?\s*:?\s*(?:№|N[o°]?\.?|номер|#)?\s*(\d{1,10}(?:\/\d+)?)(?![\d\/])`;
 const stripZeros = (n: string) => n.replace(/^0+(?=\d)/, "");
 
 /** Все номера счетов в тексте: первый: основной, остальные: «ещё счета в этом письме». */
@@ -151,7 +151,8 @@ function readTable(text: string): TableRow | null {
 }
 
 function extractPart(raw: string, sender: string): Extracted {
-  const text = fixHomoglyphs(raw);
+  // «&nbsp;» из HTML-письма: шесть пробелов той же длины, чтобы позиции подсветки не сдвинулись
+  const text = fixHomoglyphs(raw).replace(/&nbsp;/gi, "      ");
   const spans: Partial<Record<FieldKey, Span>> = {};
   const s = parseSender(sender);
   // если отправителя не указали отдельно: ищем «Название» в самом тексте
@@ -204,11 +205,18 @@ function extractPart(raw: string, sender: string): Extracted {
   let price: number | null = null;
   let pricePer: "unit" | "pack" | null = null;
   let priceIdx = -1;
+  // «цена за 1000 шт. 2 000 руб.»: цена за несколько единиц, в цену за единицу
+  const pn = new RegExp(String.raw`цена\s+за\s+(${NUM})\s*(шт|кг|рул)[а-яё.]*\s*[:—-]?\s*(${NUM})\s*${RUB}`, "i").exec(text);
   const pc = new RegExp(String.raw`цена\s*(мешка|рулона|пачки|упаковки|коробки|за\s+\S+)?\s*[:—-]?\s*(${NUM})\s*${RUB}`, "i").exec(text);
   const pp = new RegExp(String.raw`(?:по|at)\s+(${NUM})\s*(?:${RUB}|RUB|rub)`, "i").exec(text);
   // «240 рул. × 95 р.», «180 руб./кг»: цена за единицу без слов «цена» и «по»
   const px = new RegExp(String.raw`[×*]\s*(${NUM})\s*${RUB}|(?<![\d,.])(${NUM})\s*${RUB}\s*\/\s*(?:кг|шт|рул)`, "i").exec(text);
-  if (pc) {
+  if (pn && parseNum(pn[1]) > 1) {
+    price = Math.round((parseNum(pn[3]) / parseNum(pn[1])) * 10000) / 10000;
+    pricePer = "unit";
+    spans.price = span(pn);
+    priceIdx = pn.index;
+  } else if (pc) {
     price = parseNum(pc[2]);
     pricePer = pc[1] && /мешка|рулона|пачки|упаковки|коробки/i.test(pc[1]) ? "pack" : "unit";
     spans.price = span(pc);
@@ -229,7 +237,8 @@ function extractPart(raw: string, sender: string): Extracted {
   let qty: number | null = pack ? pack.count : null;
   let unit: string | null = pack ? pack.packUnit : null;
   if (!pack) {
-    const re = new RegExp(String.raw`(?<![\d×хx*])(${NUM})\s*${WORDS_RE}${THOUSAND_RE}${UNIT_RE}(?![а-яёa-z])`, "gi");
+    // «цена за 1000 шт.» это основание цены, а не количество («за 240 рул. ленты» количество)
+    const re = new RegExp(String.raw`(?<![\d×хx*])(?<!цен[аы]\s+за\s)(${NUM})\s*${WORDS_RE}${THOUSAND_RE}${UNIT_RE}(?![а-яёa-z])`, "gi");
     const all = [...text.matchAll(re)];
     let best: RegExpMatchArray | null = null;
     for (const m of all) {
@@ -266,7 +275,7 @@ function extractPart(raw: string, sender: string): Extracted {
   const tt =
     // «Итого 120 руб.», «Итого к оплате: 120 руб.», «К оплате 130 руб.», «120 (сто двадцать) руб.»
     // «Итого с учётом скидки 5%: 21 660 руб.», «Итого 22,8 тыс. руб.»
-    new RegExp(String.raw`(?:(?:итого|всего)(?:\s+к\s+оплате)?|к\s+оплате|сумма(?:\s+сч[её]та)?|на\s+сумму)(?:\s+с\s+уч[её]том\s+скидк[а-яё]*(?:\s+\d+(?:[.,]\d+)?\s*%)?)?\s*:?\s*(${NUM})\s*${THOUSAND_RE}(?:\([^)\d]{1,80}\)\s*)?${RUB}`, "i").exec(text) ??
+    new RegExp(String.raw`(?:(?:итого|всего)(?:\s+к\s+оплате)?|к\s+оплате|сумма(?:\s+сч[её]та)?|на\s+сумму)(?:\s+(?:без|с|включая)\s+НДС)?(?:\s+с\s+уч[её]том\s+скидк[а-яё]*(?:\s+\d+(?:[.,]\d+)?\s*%)?)?\s*:?\s*(${NUM})\s*${THOUSAND_RE}(?:\([^)\d]{1,80}\)\s*)?${RUB}`, "i").exec(text) ??
     new RegExp(String.raw`(?<![а-яё\w])на\s+(${NUM})\s*${THOUSAND_RE}${RUB}`, "i").exec(text) ??
     // «Итого: ₽22 800» (знак рубля перед числом), «= 22 800 р.» (запись формулой), «Total 22 800 RUB»
     new RegExp(String.raw`(?:итого|всего|к\s+оплате)\s*:?\s*₽\s*(${NUM})()`, "i").exec(text) ??
@@ -328,6 +337,14 @@ function extractPart(raw: string, sender: string): Extracted {
     }
   }
 
+  // валюта: сверка ведётся в рублях, счёт в другой валюте сверять нельзя
+  const cur = /(?<![a-zа-яё])(USD|EUR|CNY|долл[а-яё]*|евро|юан[а-яё]*)(?![a-zа-яё])|[$€¥]/i.exec(text);
+  const curRaw = cur ? (cur[1] ?? cur[0]).toLowerCase() : null;
+  const currency = !curRaw ? null : /^(usd|долл|\$)/.test(curRaw) ? "USD" : /^(eur|евро|€)/.test(curRaw) ? "EUR" : "CNY";
+  // «скидка 5%»: цена в счёте до скидки, итог после
+  const disc = /скидк[а-яё]*\s*(?:в\s+размере\s+)?(\d{1,2}(?:[.,]\d+)?)\s*%/i.exec(text);
+  const discountPct = disc ? Number(disc[1].replace(",", ".")) : null;
+
   const batch = text.match(/(перв|втор|трет)[а-яё]*\s+парти[а-яё]*/i)?.[0] ?? null;
 
   // --- признаки
@@ -336,7 +353,10 @@ function extractPart(raw: string, sender: string): Extracted {
   const rqFound =
     /(?:нов|друг)[а-яё]*\s+(?:банковск[а-яё]*\s+|платёжн[а-яё]*\s+|платежн[а-яё]*\s+)?реквизит|реквизит[а-яё]*\s+(?:изменил|сменил|поменял|обновил)[а-яё]*|(?:смен[аеуы]|изменени[еяю])\s+(?:банковск[а-яё]*\s+)?реквизит|(?:нов|друг)[а-яё]*\s+(?:расч[её]тн[а-яё]*\s+сч[её]т|р\/с)|сменил[а-яё]*\s+банк|(?:нов|друг)[а-яё]*\s+банк|от\s+другой\s+(?:фирмы|организации|компании)|на\s+(?:р\/с|сч[её]т)\s+(?:наш[а-яё]*\s+)?(?:партн[её]р|друг[а-яё]*\s+(?:организац|компани|фирм)|треть)|в\s+пользу\s+(?:ООО|АО|ИП|друг|треть)|(?:перевод[а-яё]*\s+)?на\s+(?:личн[а-яё]*\s+|банковск[а-яё]*\s+)?карт[уыеа](?![а-яё])|номер\s+карты|(?:оплат[а-яё]*|платеж[а-яё]*|платёж[а-яё]*|деньги)\s+(?:теперь\s+|с\s+\d{1,2}\.\d{1,2}\s+)?принима[а-яё]*\s+(?:ООО|АО|ИП|друг|нов|треть)|сч[её]та\s+(?:теперь\s+)?выставля[а-яё]*\s+(?:ООО|АО|ИП)/i.exec(
       text,
-    );
+    ) ??
+    // «получатель платежа теперь ИП …», «платёжные данные обновлены», «через платёжного агента»,
+    // «через СБП по номеру телефона», «права требования уступлены», «новому кредитору», факторинг
+    /получател[ья]\s+(?:платеж[а-яё]*|платёж[а-яё]*|средств|денег)\s+(?:теперь|изменил[а-яё]*|сменил[а-яё]*|друг[а-яё]*|нов[а-яё]*|[:—-]|(?:ООО|АО|ИП))|(?:платёжн|платежн)[а-яё]*\s+данн[а-яё]*\s+(?:обновл|изменил|сменил|поменял|нов)|(?:нов|друг)[а-яё]*\s+(?:платёжн|платежн)[а-яё]*\s+данн|через\s+(?:наш[а-яё]*\s+)?(?:платёжн[а-яё]*\s+|платежн[а-яё]*\s+)?агент|(?<![а-яё])СБП(?![а-яё])|по\s+номеру\s+телефона|прав[оа]?\s+требовани[а-яё]*\s+(?:по\s+сч[её]т[а-яё]*\s+\S+\s+)?(?:уступ|переда)|уступк[а-яё]*\s+прав|нов[а-яё]*\s+кредитор|факторинг/i.exec(text);
   // «наши реквизиты не менялись», «расчётный счёт прежний»: отрицание смены, если нового номера счёта не дают
   // (предупреждение о мошенниках упоминает «письма о смене реквизитов», но само сменой не является)
   const rqDenied =
@@ -399,11 +419,14 @@ function extractPart(raw: string, sender: string): Extracted {
     total,
     batch,
     requisitesChange: !!rq,
+    currency,
+    discountPct,
     resend: !!rs,
     approvalClaim: ac ? ac[0] : null,
     approvalClaimDate: ac?.[1] ? ac[1].split(".").map((p) => p.padStart(2, "0")).join(".") : null,
     promise: pr ? pr[0].trim() : null,
-    asksPaymentDate: /дат[а-яё]*\s+оплат|когда\s+(?:ждать\s+|ожидать\s+|будет\s+|планируете\s+)?оплат/i.test(text),
+    // о дате или факте оплаты: «когда ждать оплату», «оплачен ли счёт», «прошёл ли платёж», «статус оплаты»
+    asksPaymentDate: /дат[а-яё]*\s+оплат|когда\s+(?:ждать\s+|ожидать\s+|будет\s+|планируете\s+)?оплат|оплачен[аоы]?\s+ли|ли\s+оплачен|прош[её]л\s+ли\s+(?:платёж|платеж|оплата)|статус\s+оплат/i.test(text),
     otherInvoices,
     spans,
     missing,
