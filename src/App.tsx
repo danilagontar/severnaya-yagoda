@@ -63,7 +63,8 @@ export default function App() {
   const [seen, setSeen] = useState<Set<string>>(() => new Set(load<string[]>("sy.seen", [])));
   const markSeen = (id: string) => setSeen((s) => (s.has(id) ? s : new Set([...s, id])));
   useEffect(() => save("sy.seen", [...seen]), [seen]);
-  const [dark, setDark] = useState<boolean>(() => load("sy.dark", false));
+  // тёмная тема по умолчанию; выбор сохраняется только после нажатия на переключатель
+  const [dark, setDark] = useState<boolean>(() => load<string>("sy.theme", "dark") !== "light");
   const [llm, setLlm] = useState<{ mode: LlmMode; model: string | null }>({ mode: "rules", model: null });
   // баннер после события: что произошло и у каких документов сменился вердикт
   const [changes, setChanges] = useState<{ label: string; items: { id: string; from: Verdict; to: Verdict }[] } | null>(null);
@@ -82,7 +83,6 @@ export default function App() {
   }, []);
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
-    save("sy.dark", dark);
   }, [dark]);
   useEffect(() => save("sy.events", events), [events]);
   useEffect(() => save("sy.llm", llmCache), [llmCache]);
@@ -394,7 +394,10 @@ export default function App() {
           <span className="hidden text-[12px] text-rail-muted xl:inline">Срез {data.meta.snapshot}</span>
           <LlmUsage mode={llm.mode} model={llm.model} tick={tick} />
           <button
-            onClick={() => setDark(!dark)}
+            onClick={() => {
+              save("sy.theme", dark ? "light" : "dark");
+              setDark(!dark);
+            }}
             className="grid size-8 place-items-center rounded-md text-rail-muted hover:bg-white/10 hover:text-rail-fg"
             aria-label={dark ? "Светлая тема" : "Тёмная тема"}
             title={dark ? "Светлая тема" : "Тёмная тема"}

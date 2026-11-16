@@ -20,6 +20,14 @@
     <meta property="og:image:height" content="300" />
     <meta property="og:image:alt" content="Северная ягода: проверка счетов поставщиков" />
     <meta name="twitter:card" content="summary" />
+    <!-- тёмная тема до загрузки приложения, чтобы не мигал светлый фон (тот же ключ, что в App.tsx) -->
+    <script>
+      try {
+        if (JSON.parse(localStorage.getItem("sy.theme") || '"dark"') !== "light") document.documentElement.classList.add("dark");
+      } catch {
+        document.documentElement.classList.add("dark");
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
