@@ -366,7 +366,7 @@ export default function App() {
           className="flex items-center gap-2.5 rounded-md text-left"
           aria-label="План на сегодня"
         >
-          <img src="/favicon.svg" alt="" className="size-7" />
+          <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" className="size-7" />
           <div className="leading-tight">
             <p className="text-[14px] font-semibold">Северная ягода</p>
             <p className="hidden text-[11.5px] text-rail-muted sm:block">Проверка счетов поставщиков</p>
